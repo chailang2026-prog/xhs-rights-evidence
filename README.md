@@ -48,6 +48,8 @@ npm test
 4. 使用 `npm run build` 构建，使用 `npm start` 启动；
 5. 在正式环境用一条可公开访问的小红书图文笔记完成端到端扫描。
 
+部署后先登录应用，点击右上角“部署检查”。它会验证正式网址、Supabase 连接和历史字段、扫描预算、图片引擎，以及 SerpApi 账户状态和剩余次数。该接口受登录会话保护，只返回检查结论，不返回访问密码、数据库密钥、SerpApi Key 或账户邮箱。SerpApi 账户状态通过官方 [Account API](https://serpapi.com/account-api) 查询；该查询本身不计入搜索次数。
+
 ## 当前匹配范围
 
 | 平台 | 域名 |

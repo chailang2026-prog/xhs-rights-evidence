@@ -36,9 +36,25 @@ a { color: inherit; }
 .brand-radar i { width: 4px; height: 4px; border-radius: 50%; background: var(--red); box-shadow: 8px -7px 0 1px var(--red); }
 .header-actions { display: flex; align-items: center; gap: 14px; }
 .header-actions button { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 13px; }
+.header-actions button:disabled { cursor: wait; opacity: .55; }
 .private-badge { border: 1px solid var(--line); border-radius: 99px; padding: 6px 10px; color: var(--muted); font-size: 11px; }
 
 main { max-width: 1120px; margin: auto; padding: 0 24px; }
+.diagnostics-panel { margin: 28px auto 0; padding: 22px; border: 1px solid var(--line); border-radius: 18px; background: var(--paper); box-shadow: 0 12px 32px rgba(37, 30, 21, .06); }
+.diagnostics-ready { border-color: #b9d9c7; }
+.diagnostics-attention { border-color: #e5c48f; }
+.diagnostics-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.diagnostics-head h2 { margin: 3px 0 0; font-size: 22px; }
+.diagnostics-head button { width: 30px; height: 30px; border: 0; border-radius: 50%; background: #eee9e1; color: var(--muted); cursor: pointer; font-size: 20px; }
+.diagnostics-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 18px 0 13px; }
+.diagnostics-grid article { display: flex; align-items: flex-start; gap: 10px; min-width: 0; padding: 13px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.diagnostics-grid article > span { display: grid; flex: 0 0 22px; width: 22px; height: 22px; place-items: center; border-radius: 50%; color: #fff; font-weight: 800; }
+.diagnostics-grid strong { display: block; font-size: 12px; }
+.diagnostics-grid p { margin: 4px 0 0; color: var(--muted); font-size: 10px; line-height: 1.55; word-break: break-word; }
+.diagnostic-ok > span { background: #3b9665; }
+.diagnostic-warning > span { background: var(--amber); }
+.diagnostic-error > span { background: var(--red); }
+.diagnostics-panel > small { color: var(--muted); font-size: 9px; }
 .hero { min-height: 565px; display: grid; grid-template-columns: .85fr 1.15fr; gap: 64px; align-items: center; padding: 74px 0 55px; position: relative; }
 .hero::before { content: ""; position: absolute; top: 74px; left: -82px; width: 138px; height: 138px; border: 1px dashed rgba(255, 36, 66, .32); border-radius: 50%; pointer-events: none; }
 .hero::after { content: "ORIGINAL / MATCH / REVIEW"; position: absolute; left: -43px; bottom: 92px; transform: rotate(-90deg); transform-origin: left; color: #aaa096; font-size: 9px; letter-spacing: .22em; }
@@ -208,7 +224,11 @@ footer p { margin: 0; text-align: right; }
 
 @media (max-width: 800px) {
   .topbar { height: 60px; padding: 0 16px; }
+  .header-actions { gap: 8px; }
+  .private-badge { display: none; }
   main { padding: 0 16px; }
+  .diagnostics-panel { margin: 16px 0 0; padding: 16px; border-radius: 14px; }
+  .diagnostics-grid { grid-template-columns: 1fr; }
   .hero { min-height: auto; grid-template-columns: 1fr; gap: 36px; padding: 48px 0 36px; }
   .hero::before, .hero::after { display: none; }
   .hero-copy h1 { font-size: clamp(38px, 12vw, 52px); }

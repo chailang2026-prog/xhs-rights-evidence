@@ -12,6 +12,11 @@ import {
 
 type AuthState = "loading" | "login" | "ready" | "unconfigured";
 type Filter = "全部" | ReviewStatus;
+type DiagnosticReport = {
+  ready: boolean;
+  checkedAt: string;
+  checks: Array<{ id: string; label: string; status: "ok" | "warning" | "error"; detail: string }>;
+};
 
 const scanSteps = [
   "正在读取笔记中的文字与图片…",
@@ -54,6 +59,8 @@ export default function Scanner() {
   const [message, setMessage] = useState("");
   const [filter, setFilter] = useState<Filter>("全部");
   const [expandedScan, setExpandedScan] = useState<string | null>(null);
+  const [diagnostics, setDiagnostics] = useState<DiagnosticReport | null>(null);
+  const [checkingDeployment, setCheckingDeployment] = useState(false);
 
   useEffect(() => {
     fetch("/api/auth/status")
@@ -117,6 +124,25 @@ export default function Scanner() {
     await fetch("/api/auth/logout", { method: "POST" });
     setScans([]);
     setAuth("login");
+  }
+
+  async function checkDeployment() {
+    setCheckingDeployment(true);
+    try {
+      const response = await fetch("/api/diagnostics", { cache: "no-store" });
+      const data = await response.json() as DiagnosticReport & { error?: string };
+      if (response.status === 401) {
+        setAuth("login");
+        throw new Error("登录已过期，请重新登录。");
+      }
+      if (!response.ok || !Array.isArray(data.checks)) throw new Error(data.error || "部署检查失败。");
+      setDiagnostics(data);
+      setMessage(data.ready ? "部署检查通过，可以开始真实扫描。" : "部署检查发现问题，请按红色提示处理。");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "部署检查失败。");
+    } finally {
+      setCheckingDeployment(false);
+    }
   }
 
   function togglePlatform(id: PlatformId) {
@@ -248,10 +274,15 @@ export default function Scanner() {
     <div className="app-shell">
       <header className="topbar">
         <a className="brand" href="#top"><span className="brand-radar"><i /></span><b>原创雷达</b></a>
-        <div className="header-actions"><span className="private-badge">仅你可见</span><button onClick={logout}>退出</button></div>
+        <div className="header-actions"><span className="private-badge">仅你可见</span><button onClick={checkDeployment} disabled={checkingDeployment}>{checkingDeployment ? "检查中…" : "部署检查"}</button><button onClick={logout}>退出</button></div>
       </header>
 
       <main id="top">
+        {diagnostics && <section className={`diagnostics-panel ${diagnostics.ready ? "diagnostics-ready" : "diagnostics-attention"}`} aria-label="部署诊断结果">
+          <div className="diagnostics-head"><div><p className="section-kicker">DEPLOYMENT CHECK</p><h2>{diagnostics.ready ? "部署能力正常" : "部署仍需处理"}</h2></div><button type="button" onClick={() => setDiagnostics(null)} aria-label="关闭部署诊断">×</button></div>
+          <div className="diagnostics-grid">{diagnostics.checks.map((check) => <article key={check.id} className={`diagnostic-${check.status}`}><span>{check.status === "ok" ? "✓" : check.status === "warning" ? "!" : "×"}</span><div><strong>{check.label}</strong><p>{check.detail}</p></div></article>)}</div>
+          <small>检查时间：{formatDate(diagnostics.checkedAt)}。诊断不会返回密码、数据库密钥、SerpApi Key 或账户邮箱。</small>
+        </section>}
         <section className="hero">
           <div className="hero-copy">
             <p className="eyebrow"><span>小红书原创保护</span> · 图文全网匹配</p>

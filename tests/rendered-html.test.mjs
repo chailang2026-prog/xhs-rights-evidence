@@ -3,11 +3,13 @@ import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("implements the source-note scanning workflow", async () => {
-  const [scanner, route, rerunRoute, imageRoute, search, source] = await Promise.all([
+  const [scanner, route, rerunRoute, imageRoute, diagnosticsRoute, diagnostics, search, source] = await Promise.all([
     readFile(new URL("../app/Scanner.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/scans/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/scans/[id]/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/source-image/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/diagnostics/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/diagnostics.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/scanner.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/source-note.ts", import.meta.url), "utf8"),
   ]);
@@ -19,6 +21,8 @@ test("implements the source-note scanning workflow", async () => {
   assert.match(scanner, /历史留存/);
   assert.match(scanner, /最近命中/);
   assert.match(scanner, /导出 CSV/);
+  assert.match(scanner, /部署检查/);
+  assert.match(scanner, /诊断不会返回密码、数据库密钥、SerpApi Key 或账户邮箱/);
   assert.match(route, /extractSourceNote/);
   assert.match(route, /scanPublicWeb/);
   assert.match(rerunRoute, /extractSourceNote/);
@@ -29,6 +33,9 @@ test("implements the source-note scanning workflow", async () => {
   assert.match(search, /createSourceImageProxyUrl/);
   assert.match(imageRoute, /verifySourceImageProxyUrl/);
   assert.match(imageRoute, /12_000_000/);
+  assert.match(diagnosticsRoute, /isSessionValid/);
+  assert.match(diagnostics, /account\.json/);
+  assert.doesNotMatch(diagnostics, /account_email/);
   assert.match(source, /xhslink\.com/);
   assert.doesNotMatch(scanner, /添加侵权链接|手工登记/);
 });

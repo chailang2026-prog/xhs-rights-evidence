@@ -7,11 +7,53 @@ import { createSourceImageProxyUrl, isAllowedSourceImageUrl, normalizeSourceImag
 import { GET as getSourceImage } from "../app/api/source-image/route.ts";
 import { scanPublicWeb } from "../lib/scanner.ts";
 import { publicRequestOrigin } from "../lib/request-origin.ts";
+import { diagnoseSerpApiAccount } from "../lib/diagnostics.ts";
 
 const originalFetch = globalThis.fetch;
 
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
+});
+
+test("checks SerpApi quota without exposing account secrets", async () => {
+  const previousSerpKey = process.env.SERPAPI_API_KEY;
+  process.env.SERPAPI_API_KEY = "test-serp-key";
+  try {
+    globalThis.fetch = async (value, options) => {
+      const url = new URL(String(value));
+      assert.equal(url.hostname, "serpapi.com");
+      assert.equal(url.pathname, "/account.json");
+      assert.equal(url.searchParams.get("api_key"), "test-serp-key");
+      assert.equal(options?.cache, "no-store");
+      return Response.json({
+        account_status: "Active",
+        plan_name: "Developer",
+        total_searches_left: 88,
+        this_month_usage: 12,
+        api_key: "test-serp-key",
+        account_email: "private@example.com",
+      });
+    };
+
+    const result = await diagnoseSerpApiAccount();
+    assert.deepEqual(result, {
+      accountStatus: "Active",
+      planName: "Developer",
+      searchesLeft: 88,
+      thisMonthUsage: 12,
+    });
+    assert.doesNotMatch(JSON.stringify(result), /test-serp-key|private@example\.com/);
+
+    globalThis.fetch = async () => Response.json({ error: "密钥 test-serp-key 无效" }, { status: 401 });
+    await assert.rejects(diagnoseSerpApiAccount(), (error) => {
+      assert.doesNotMatch(String(error), /test-serp-key/);
+      assert.match(String(error), /\[已隐藏\]/);
+      return true;
+    });
+  } finally {
+    if (previousSerpKey === undefined) delete process.env.SERPAPI_API_KEY;
+    else process.env.SERPAPI_API_KEY = previousSerpKey;
+  }
 });
 
 test("extracts public note metadata without pulling unrelated page content", async () => {

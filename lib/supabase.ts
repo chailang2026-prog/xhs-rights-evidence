@@ -107,6 +107,21 @@ export async function listScans() {
   return (data as ScanRow[]).map(toScan);
 }
 
+export async function diagnoseDatabase() {
+  const db = database();
+  const [scans, matches] = await Promise.all([
+    db.from("note_scans").select("id", { count: "exact", head: true }),
+    db.from("scan_matches").select("id,last_seen_at,is_current", { count: "exact", head: true }),
+  ]);
+  if (scans.error) throw scans.error;
+  if (matches.error) throw matches.error;
+  return {
+    scanCount: scans.count || 0,
+    matchCount: matches.count || 0,
+    historyMigrationReady: true,
+  };
+}
+
 export async function getScan(id: string) {
   const { data, error } = await database()
     .from("note_scans")
