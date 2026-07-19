@@ -30,6 +30,8 @@ create table if not exists public.scan_matches (
   review_status text not null default '待复核' check (review_status in ('待复核', '确认侵权', '已排除', '处理中', '已解决')),
   evidence jsonb not null default '[]'::jsonb,
   discovered_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now(),
+  is_current boolean not null default true,
   updated_at timestamptz not null default now(),
   unique (scan_id, target_url)
 );
@@ -38,6 +40,7 @@ create index if not exists note_scans_created_at_idx on public.note_scans(create
 create index if not exists scan_matches_scan_id_idx on public.scan_matches(scan_id);
 create index if not exists scan_matches_review_status_idx on public.scan_matches(review_status);
 create index if not exists scan_matches_overall_score_idx on public.scan_matches(overall_score desc);
+create index if not exists scan_matches_is_current_idx on public.scan_matches(scan_id, is_current);
 
 alter table public.note_scans enable row level security;
 alter table public.scan_matches enable row level security;

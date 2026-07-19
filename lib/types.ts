@@ -42,6 +42,8 @@ export type ScanMatch = {
   reviewStatus: ReviewStatus;
   evidence: string[];
   discoveredAt: string;
+  lastSeenAt: string;
+  isCurrent: boolean;
 };
 
 export type NoteScan = {
@@ -59,4 +61,4 @@ export type NoteScan = {
   matches: ScanMatch[];
 };
 
-export type CandidateMatch = Omit<ScanMatch, "id" | "scanId" | "reviewStatus" | "discoveredAt">;
+export type CandidateMatch = Omit<ScanMatch, "id" | "scanId" | "reviewStatus" | "discoveredAt" | "lastSeenAt" | "isCurrent">;

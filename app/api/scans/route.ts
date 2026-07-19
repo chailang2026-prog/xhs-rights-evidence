@@ -35,7 +35,7 @@ export async function POST(request: Request) {
     const scan = await createScan(source, selectedPlatforms);
     scanId = scan.id;
     const result = await scanPublicWeb(source, selectedPlatforms, publicRequestOrigin(request));
-    await replaceMatches(scan.id, result.matches);
+    await replaceMatches(scan.id, result.matches, { markMissingInactive: !result.partial });
     await finishScan(scan.id, result.partial ? "部分完成" : "已完成", result.warnings.join("；") || null);
     return Response.json({ scan: await getScan(scan.id) }, { status: 201 });
   } catch (error) {

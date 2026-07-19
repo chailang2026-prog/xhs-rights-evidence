@@ -16,6 +16,8 @@ test("implements the source-note scanning workflow", async () => {
   assert.match(scanner, /大众点评/);
   assert.match(scanner, /Google Lens/);
   assert.match(scanner, /疑似侵权线索/);
+  assert.match(scanner, /历史留存/);
+  assert.match(scanner, /最近命中/);
   assert.match(scanner, /导出 CSV/);
   assert.match(route, /extractSourceNote/);
   assert.match(route, /scanPublicWeb/);
@@ -32,17 +34,22 @@ test("implements the source-note scanning workflow", async () => {
 });
 
 test("keeps secrets server-side and protects the database", async () => {
-  const [auth, supabase, migration, envExample] = await Promise.all([
+  const [auth, supabase, migration, historyMigration, envExample] = await Promise.all([
     readFile(new URL("../lib/auth.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/supabase.ts", import.meta.url), "utf8"),
     readFile(new URL("../supabase/migrations/001_original_radar.sql", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/migrations/002_match_history.sql", import.meta.url), "utf8"),
     readFile(new URL("../.env.example", import.meta.url), "utf8"),
   ]);
 
   assert.match(auth, /HttpOnly/);
   assert.match(auth, /SameSite=Lax/);
   assert.match(supabase, /SUPABASE_SERVICE_ROLE_KEY/);
+  assert.match(supabase, /\.upsert\(/);
+  assert.doesNotMatch(supabase, /from\("scan_matches"\)\.delete\(\)/);
   assert.match(migration, /enable row level security/);
+  assert.match(historyMigration, /last_seen_at/);
+  assert.match(historyMigration, /is_current/);
   assert.match(envExample, /SERPAPI_API_KEY/);
   assert.doesNotMatch(envExample, /sk-|eyJ[a-zA-Z0-9]/);
 });

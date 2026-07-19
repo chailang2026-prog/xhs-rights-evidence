@@ -144,7 +144,8 @@ export default function Scanner() {
       setScans((current) => [data.scan as NoteScan, ...current.filter((item) => item.id !== data.scan?.id)]);
       setExpandedScan(data.scan.id);
       setNoteUrl("");
-      setMessage(data.scan.matches.length ? `已找到 ${data.scan.matches.length} 条疑似相似内容，请逐条复核。` : "本次未发现达到阈值的公开线索。");
+      const currentMatches = data.scan.matches.filter((match) => match.isCurrent).length;
+      setMessage(currentMatches ? `本轮找到 ${currentMatches} 条疑似相似内容，请逐条复核。` : "本次未发现达到阈值的公开线索。");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "扫描失败。");
     } finally {
@@ -160,7 +161,8 @@ export default function Scanner() {
       const data = (await response.json()) as { scan?: NoteScan; error?: string };
       if (!response.ok || !data.scan) throw new Error(data.error || "重新扫描失败。");
       setScans((current) => current.map((item) => item.id === id ? data.scan as NoteScan : item));
-      setMessage(`重新扫描完成，当前有 ${data.scan.matches.length} 条线索。`);
+      const currentMatches = data.scan.matches.filter((match) => match.isCurrent).length;
+      setMessage(`重新扫描完成：本轮 ${currentMatches} 条，累计保留 ${data.scan.matches.length} 条线索。`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "重新扫描失败。");
     } finally {
@@ -206,8 +208,8 @@ export default function Scanner() {
     .filter((scan) => scan.matches.length), [filter, scans]);
 
   function exportCsv() {
-    const headers = ["原笔记", "目标平台", "疑似侵权链接", "匹配类型", "综合线索强度", "文字匹配强度", "图片匹配强度", "复核状态", "证据说明", "发现时间"];
-    const rows = allMatches.map(({ scan, match }) => [scan.sourceUrl, match.platformName, match.targetUrl, match.matchType, percent(match.overallScore), percent(match.textScore), percent(match.imageScore), match.reviewStatus, match.evidence.join("；"), match.discoveredAt]);
+    const headers = ["原笔记", "目标平台", "疑似侵权链接", "匹配类型", "综合线索强度", "文字匹配强度", "图片匹配强度", "本轮状态", "复核状态", "证据说明", "首次发现", "最近命中"];
+    const rows = allMatches.map(({ scan, match }) => [scan.sourceUrl, match.platformName, match.targetUrl, match.matchType, percent(match.overallScore), percent(match.textScore), percent(match.imageScore), match.isCurrent ? "本轮命中" : "历史线索", match.reviewStatus, match.evidence.join("；"), match.discoveredAt, match.lastSeenAt]);
     const csv = `\uFEFF${[headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n")}`;
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
     const link = document.createElement("a");
@@ -286,13 +288,14 @@ export default function Scanner() {
           </div>
 
           <div className="summary-strip">
-            <button className={filter === "全部" ? "active" : ""} onClick={() => setFilter("全部")}><strong>{allMatches.length}</strong><span>全部线索</span></button>
+            <button className={filter === "全部" ? "active" : ""} onClick={() => setFilter("全部")}><strong>{allMatches.length}</strong><span>累计线索</span></button>
             {reviewStatuses.slice(0, 3).map((status) => <button key={status} className={filter === status ? "active" : ""} onClick={() => setFilter(filter === status ? "全部" : status)}><strong>{counts[status]}</strong><span>{status}</span></button>)}
           </div>
 
           <div className="scan-list" aria-live="polite">
             {loading ? <div className="loading-card"><span /><span /><span /></div> : visibleScans.length ? visibleScans.map((scan) => {
               const open = expandedScan === scan.id || filter !== "全部";
+              const currentMatchCount = scan.matches.filter((match) => match.isCurrent).length;
               return (
                 <article className="scan-card" key={scan.id}>
                   <div className="source-row">
@@ -303,7 +306,7 @@ export default function Scanner() {
                       ) : <span>小红书</span>}
                     </div>
                     <div className="source-info"><div><span className={`scan-status status-${scan.status}`}>{scan.status}</span><time>{formatDate(scan.createdAt)}</time></div><h3>{scan.sourceTitle || "小红书图文笔记"}</h3><a href={scan.sourceUrl} target="_blank" rel="noreferrer">查看原笔记 ↗</a></div>
-                    <div className="scan-count"><strong>{scan.matches.length}</strong><span>条线索</span></div>
+                    <div className="scan-count"><strong>{currentMatchCount}</strong><span>本轮线索</span>{scan.matches.length !== currentMatchCount && <small>累计 {scan.matches.length}</small>}</div>
                   </div>
                   {scan.errorMessage && <p className="scan-warning">部分能力未完成：{scan.errorMessage}</p>}
                   <div className="scan-toolbar"><button onClick={() => setExpandedScan(open ? null : scan.id)}>{open ? "收起线索" : `查看 ${scan.matches.length} 条线索`}</button><button onClick={() => rerunScan(scan.id)} disabled={scanning}>重新扫描</button><button className="danger-link" onClick={() => removeScan(scan.id)}>删除</button></div>
@@ -322,10 +325,10 @@ export default function Scanner() {
 
 function MatchCard({ match, onChange }: { match: ScanMatch; onChange: (status: ReviewStatus) => void }) {
   return (
-    <article className="match-card">
+    <article className={`match-card${match.isCurrent ? "" : " historical"}`}>
       <div className="match-score"><strong>{percent(match.overallScore)}</strong><span>线索强度</span></div>
       <div className="match-body">
-        <div className="match-meta"><span className={`platform platform-${match.platform}`}>{match.platformName}</span><span>{match.matchType}</span><time>{formatDate(match.discoveredAt)}</time></div>
+        <div className="match-meta"><span className={`platform platform-${match.platform}`}>{match.platformName}</span><span>{match.matchType}</span><span className={`presence ${match.isCurrent ? "presence-current" : "presence-history"}`}>{match.isCurrent ? "本轮命中" : "历史留存"}</span><span className="match-dates"><time>首次 {formatDate(match.discoveredAt)}</time><time>最近 {formatDate(match.lastSeenAt)}</time></span></div>
         <h4>{match.title}</h4>
         <p>{match.snippet}</p>
         <div className="evidence-row"><Score label="文字" value={match.textScore} tone="amber" /><Score label="图片" value={match.imageScore} tone="red" />{match.evidence.map((item) => <span className="evidence-chip" key={item}>{item}</span>)}</div>

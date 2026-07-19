@@ -34,7 +34,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     }
     const result = await scanPublicWeb(source, scan.selectedPlatforms, publicRequestOrigin(request));
     const warnings = [...new Set([refreshWarning, ...result.warnings].filter(Boolean))];
-    await replaceMatches(id, result.matches);
+    await replaceMatches(id, result.matches, { markMissingInactive: !result.partial });
     await finishScan(id, result.partial || Boolean(refreshWarning) ? "部分完成" : "已完成", warnings.join("；") || null);
     return Response.json({ scan: await getScan(id) });
   } catch (error) {

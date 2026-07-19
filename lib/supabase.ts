@@ -39,6 +39,8 @@ type MatchRow = {
   review_status: ReviewStatus;
   evidence: string[] | null;
   discovered_at: string;
+  last_seen_at?: string;
+  is_current?: boolean;
 };
 
 type ScanRow = {
@@ -73,6 +75,8 @@ function toMatch(row: MatchRow): ScanMatch {
     reviewStatus: row.review_status,
     evidence: row.evidence || [],
     discoveredAt: row.discovered_at,
+    lastSeenAt: row.last_seen_at || row.discovered_at,
+    isCurrent: row.is_current !== false,
   };
 }
 
@@ -161,7 +165,7 @@ export async function refreshScanSource(id: string, source: SourceNote) {
   if (error) throw error;
 }
 
-export async function replaceMatches(scanId: string, matches: CandidateMatch[]) {
+export async function replaceMatches(scanId: string, matches: CandidateMatch[], options: { markMissingInactive?: boolean } = {}) {
   const db = database();
   const { data: previous, error: previousError } = await db
     .from("scan_matches")
@@ -169,10 +173,13 @@ export async function replaceMatches(scanId: string, matches: CandidateMatch[]) 
     .eq("scan_id", scanId);
   if (previousError) throw previousError;
   const previousStatuses = new Map((previous || []).map((item) => [item.target_url as string, item.review_status as ReviewStatus]));
-  const { error: deleteError } = await db.from("scan_matches").delete().eq("scan_id", scanId);
-  if (deleteError) throw deleteError;
+  if (options.markMissingInactive !== false) {
+    const { error: inactiveError } = await db.from("scan_matches").update({ is_current: false }).eq("scan_id", scanId);
+    if (inactiveError) throw inactiveError;
+  }
   if (!matches.length) return;
-  const { error } = await db.from("scan_matches").insert(
+  const now = new Date().toISOString();
+  const { error } = await db.from("scan_matches").upsert(
     matches.map((match) => ({
       scan_id: scanId,
       target_url: match.targetUrl,
@@ -187,7 +194,11 @@ export async function replaceMatches(scanId: string, matches: CandidateMatch[]) 
       match_type: match.matchType,
       review_status: previousStatuses.get(match.targetUrl) || "待复核",
       evidence: match.evidence,
+      last_seen_at: now,
+      is_current: true,
+      updated_at: now,
     })),
+    { onConflict: "scan_id,target_url" },
   );
   if (error) throw error;
 }
