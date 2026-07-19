@@ -66,6 +66,20 @@ test("keeps secrets server-side and protects the database", async () => {
   assert.doesNotMatch(envExample, /sk-|eyJ[a-zA-Z0-9]/);
 });
 
+test("provides a secret-safe production deployment verifier", async () => {
+  const [verifier, packageJson] = await Promise.all([
+    readFile(new URL("../scripts/verify-deployment.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../package.json", import.meta.url), "utf8"),
+  ]);
+  assert.match(packageJson, /verify:deployment/);
+  assert.match(verifier, /\/api\/auth\/login/);
+  assert.match(verifier, /\/api\/diagnostics/);
+  assert.match(verifier, /\/api\/scans/);
+  assert.match(verifier, /requiredPlatforms/);
+  assert.match(verifier, /\[已隐藏\]/);
+  assert.doesNotMatch(verifier, /console\.(?:log|error)\(password|console\.(?:log|error)\(noteInput/);
+});
+
 test("removes platform-specific D1 runtime files", async () => {
   await assert.rejects(access(new URL("../.openai/hosting.json", import.meta.url)));
   await assert.rejects(access(new URL("../db/records.ts", import.meta.url)));

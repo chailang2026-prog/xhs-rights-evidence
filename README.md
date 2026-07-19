@@ -50,6 +50,17 @@ npm test
 
 部署后先登录应用，点击右上角“部署检查”。它会验证正式网址、Supabase 连接和历史字段、扫描预算、图片引擎，以及 SerpApi 账户状态和剩余次数。该接口受登录会话保护，只返回检查结论，不返回访问密码、数据库密钥、SerpApi Key 或账户邮箱。SerpApi 账户状态通过官方 [Account API](https://serpapi.com/account-api) 查询；该查询本身不计入搜索次数。
 
+正式环境可用本人刚复制的公开图文笔记执行自动验收。脚本会登录、检查部署、提交全平台扫描，并确认正文、图片和扫描记录均已生成；它不会输出密码、密钥或笔记正文，也不会删除生成的扫描记录：
+
+```bash
+VERIFY_BASE_URL=https://你的正式网址 \
+VERIFY_NOTE_INPUT='小红书链接或整段分享文字' \
+VERIFY_APP_PASSWORD='访问密码' \
+npm run verify:deployment
+```
+
+若在已经配置 `APP_PASSWORD` 的扣子云运行，可省略 `VERIFY_APP_PASSWORD`。验收要求扫描状态为“已完成”；“部分完成”会按失败处理，便于暴露任何未成功的搜索引擎或平台查询。
+
 ## 当前匹配范围
 
 | 平台 | 域名 |

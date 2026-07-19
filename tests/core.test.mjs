@@ -8,11 +8,63 @@ import { GET as getSourceImage } from "../app/api/source-image/route.ts";
 import { scanPublicWeb } from "../lib/scanner.ts";
 import { publicRequestOrigin } from "../lib/request-origin.ts";
 import { diagnoseSerpApiAccount } from "../lib/diagnostics.ts";
+import { verifyDeployment } from "../scripts/verify-deployment.mjs";
 
 const originalFetch = globalThis.fetch;
 
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
+});
+
+test("verifies a deployed scan end to end without returning secrets or note content", async () => {
+  const calls = [];
+  const noteInput = "88 作者发布了一篇笔记 https://xhslink.com/a/current，复制后打开小红书";
+  const password = "private-test-password";
+  const fetchImpl = async (value, options = {}) => {
+    const url = new URL(String(value));
+    calls.push({ path: url.pathname, options });
+    if (url.pathname === "/api/auth/login") {
+      assert.equal(JSON.parse(options.body).password, password);
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "content-type": "application/json", "set-cookie": "rights_radar_session=signed-session; Path=/; HttpOnly" },
+      });
+    }
+    assert.equal(options.headers.cookie, "rights_radar_session=signed-session");
+    if (url.pathname === "/api/diagnostics") {
+      return Response.json({ ready: true, checks: [{ label: "Supabase 与迁移", status: "ok" }] });
+    }
+    if (url.pathname === "/api/scans") {
+      const body = JSON.parse(options.body);
+      assert.equal(body.noteUrl, noteInput);
+      assert.deepEqual(body.platforms, ["dianping", "ctrip", "qunar", "fliggy", "amap", "web"]);
+      return Response.json({
+        scan: {
+          id: "scan-1",
+          sourceText: "从白色灯塔沿着海边石板路走到蓝色木门。",
+          sourceImages: ["https://sns-webpic-qc.xhscdn.com/source.webp"],
+          selectedPlatforms: body.platforms,
+          status: "已完成",
+          errorMessage: null,
+          matches: [{
+            targetUrl: "https://www.dianping.com/shop/1/review/2",
+            platform: "dianping",
+            platformName: "大众点评",
+            evidence: ["百度文字命中"],
+            isCurrent: true,
+          }],
+        },
+      }, { status: 201 });
+    }
+    return Response.json({ error: "unexpected endpoint" }, { status: 404 });
+  };
+
+  const result = await verifyDeployment({ baseUrl: "https://radar.example", noteInput, password, fetchImpl });
+  assert.equal(result.ok, true);
+  assert.equal(result.scan.extractedImages, 1);
+  assert.equal(result.scan.currentMatches, 1);
+  assert.deepEqual(calls.map((call) => call.path), ["/api/auth/login", "/api/diagnostics", "/api/scans"]);
+  assert.doesNotMatch(JSON.stringify(result), /private-test-password|xhslink\.com|白色灯塔/);
 });
 
 test("checks SerpApi quota without exposing account secrets", async () => {

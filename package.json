@@ -10,7 +10,8 @@
     "build": "next build",
     "start": "next start",
     "test": "npm run build && node --experimental-strip-types --test tests/rendered-html.test.mjs tests/core.test.mjs",
-    "lint": "eslint . --ignore-pattern .next --ignore-pattern dist"
+    "lint": "eslint . --ignore-pattern .next --ignore-pattern dist",
+    "verify:deployment": "node scripts/verify-deployment.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
