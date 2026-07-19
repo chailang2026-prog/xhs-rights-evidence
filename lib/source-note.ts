@@ -208,9 +208,11 @@ async function fetchNotePage(initialUrl: URL, signal: AbortSignal) {
       const location = response.headers.get("location");
       if (!location) throw new Error("小红书短链接返回了无效跳转。");
       const nextUrl = new URL(location, currentUrl);
-      if (nextUrl.protocol !== "https:" || !allowedSourceHost(nextUrl.hostname)) {
+      if (!allowedSourceHost(nextUrl.hostname)) {
         throw new Error("小红书链接跳转到了不受信任的地址，已停止处理。");
       }
+      if (nextUrl.protocol === "http:") nextUrl.protocol = "https:";
+      if (nextUrl.protocol !== "https:") throw new Error("小红书链接使用了不受支持的跳转协议，已停止处理。");
       currentUrl = nextUrl;
       continue;
     }
@@ -236,6 +238,9 @@ export async function extractSourceNote(inputUrl: string): Promise<SourceNote> {
     clearTimeout(timer);
   }
   if (!response.ok) throw new Error(`小红书页面读取失败（${response.status}），请确认链接可以公开访问。`);
+  if (allowedSourceHost(finalUrl.hostname) && !noteIdFromUrl(finalUrl)) {
+    throw new Error("这个链接没有指向具体的小红书笔记，可能是短链已过期或复制不完整。");
+  }
   const contentLength = Number(response.headers.get("content-length") || 0);
   if (contentLength > 6_000_000) throw new Error("笔记页面内容过大，无法安全读取。");
   const html = await response.text();

@@ -95,6 +95,59 @@ test("accepts the full Xiaohongshu mobile share text and extracts its trusted UR
   assert.match(note.text, /江面日落/);
 });
 
+test("upgrades a trusted Xiaohongshu HTTP redirect without fetching it over plaintext", async () => {
+  const requestedUrls = [];
+  globalThis.fetch = async (value) => {
+    requestedUrls.push(String(value));
+    if (requestedUrls.length === 1) {
+      return new Response(null, {
+        status: 307,
+        headers: { location: "http://www.xiaohongshu.com/explore/abc123" },
+      });
+    }
+    return {
+      ok: true,
+      status: 200,
+      url: String(value),
+      headers: new Headers({ "content-length": "500" }),
+      text: async () => `<!doctype html><meta property="og:title" content="泉州古城路线"><meta property="og:description" content="从西街钟楼出发，沿着巷子走到开元寺附近看日落。">`,
+    };
+  };
+
+  const note = await extractSourceNote("https://xhslink.com/a/example");
+  assert.deepEqual(requestedUrls, [
+    "https://xhslink.com/a/example",
+    "https://www.xiaohongshu.com/explore/abc123",
+  ]);
+  assert.equal(note.title, "泉州古城路线");
+});
+
+test("rejects an expired short link that redirects to the Xiaohongshu homepage", async () => {
+  let requestCount = 0;
+  globalThis.fetch = async (value) => {
+    requestCount += 1;
+    if (requestCount === 1) {
+      return new Response(null, {
+        status: 307,
+        headers: { location: "http://www.xiaohongshu.com/" },
+      });
+    }
+    return {
+      ok: true,
+      status: 200,
+      url: String(value),
+      headers: new Headers({ "content-length": "500" }),
+      text: async () => `<!doctype html><meta property="og:title" content="小红书热门内容"><meta property="og:description" content="发现美好、真实、多元的生活方式和热门推荐内容。">`,
+    };
+  };
+
+  await assert.rejects(
+    extractSourceNote("https://xhslink.com/a/expired"),
+    /没有指向具体.*笔记|短链已过期/,
+  );
+  assert.equal(requestCount, 2);
+});
+
 test("rejects credentials embedded in a Xiaohongshu source URL before fetching", async () => {
   let fetched = false;
   globalThis.fetch = async () => {
@@ -134,13 +187,13 @@ test("rejects an unavailable note page instead of using hot-list text", async ()
   globalThis.fetch = async () => ({
     ok: true,
     status: 200,
-    url: "https://www.xiaohongshu.com/explore/missing",
+    url: "https://www.xiaohongshu.com/explore/deadbeef0000000012345678",
     headers: new Headers(),
     text: async () => `<html><body><script>window.__INITIAL_STATE__={"noteData":[],"hotlistData":[{"title":"旅行热门内容"}]}</script></body></html>`,
   });
 
   await assert.rejects(
-    extractSourceNote("https://www.xiaohongshu.com/explore/missing"),
+    extractSourceNote("https://www.xiaohongshu.com/explore/deadbeef0000000012345678"),
     /没有返回公开图文内容/,
   );
 });
