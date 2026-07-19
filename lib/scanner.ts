@@ -4,7 +4,7 @@ import {
   type PlatformId,
   type SourceNote,
 } from "./types.ts";
-import { extractSearchPhrases, textSimilarity } from "./matching.ts";
+import { extractSearchKeywords, extractSearchPhrases, textSimilarity } from "./matching.ts";
 import { createSourceImageProxyUrl } from "./source-images.ts";
 
 type SearchResult = {
@@ -50,6 +50,7 @@ type TextQuery = {
   platform: (typeof targetPlatforms)[number];
   phrase: string;
   engine: "baidu" | "google";
+  mode: "exact" | "keywords";
 };
 
 type ImageSearchEngine = "google_lens_exact" | "google_lens" | "bing_reverse_image";
@@ -149,13 +150,19 @@ async function textCandidates(note: SourceNote, selected: PlatformId[]) {
   const phrases = extractSearchPhrases(note);
   if (!phrases.length) return { candidates: [], warnings: [], attemptedQueries: 0, successfulQueries: 0 } satisfies CandidateBatch;
   const platforms = targetPlatforms.filter((platform) => selected.includes(platform.id));
-  const queries: TextQuery[] = phrases.slice(0, 3).flatMap((phrase) => (["baidu", "google"] as const)
-    .flatMap((engine) => platforms.map((platform) => ({ platform, phrase, engine })))).slice(0, textSearchLimit());
-  const batches = await mapLimit(queries, 3, async ({ platform, phrase, engine }) => {
+  const primaryExact = (["baidu", "google"] as const).flatMap((engine) => platforms
+    .map((platform) => ({ platform, phrase: phrases[0], engine, mode: "exact" as const })));
+  const keywords = extractSearchKeywords(note).join(" ");
+  const adapted = keywords ? platforms.map((platform) => ({ platform, phrase: keywords, engine: "baidu" as const, mode: "keywords" as const })) : [];
+  const secondaryExact = phrases.slice(1, 3).flatMap((phrase) => (["baidu", "google"] as const)
+    .flatMap((engine) => platforms.map((platform) => ({ platform, phrase, engine, mode: "exact" as const }))));
+  const queries: TextQuery[] = [...primaryExact, ...adapted, ...secondaryExact].slice(0, textSearchLimit());
+  const batches = await mapLimit(queries, 3, async ({ platform, phrase, engine, mode }) => {
     const exactPhrase = phrase.replace(/"/g, "");
     try {
       const domainClause = platform.domains.map((domain) => `site:${domain}`).join(" OR ");
-      const query = domainClause ? `(${domainClause}) \"${exactPhrase}\"` : `\"${exactPhrase}\"`;
+      const contentClause = mode === "exact" ? `\"${exactPhrase}\"` : exactPhrase;
+      const query = domainClause ? `(${domainClause}) ${contentClause}` : contentClause;
       const data = await serpApi(engine === "baidu"
         ? { engine, q: query, rn: "20" }
         : { engine, q: query, num: "20", hl: "zh-cn", gl: "cn", safe: "active", filter: "0" });
@@ -170,9 +177,10 @@ async function textCandidates(note: SourceNote, selected: PlatformId[]) {
           const measuredScore = Math.max(...phrases.map((item) => textSimilarity(item, candidateText)), textSimilarity(note.title, candidateText));
           // Search engines sometimes omit the matched sentence from their snippet. A result
           // returned for the quoted source phrase remains a useful lead, but at low strength.
-          const score = Math.max(measuredScore, 0.36);
+          const score = mode === "exact" ? Math.max(measuredScore, 0.36) : measuredScore;
           const rank = Number.isFinite(result.position) ? `第 ${result.position} 位` : "公开结果";
           const engineName = engine === "baidu" ? "百度" : "Google";
+          const queryKind = mode === "exact" ? "精确原文" : "改写特征词";
           return {
             targetUrl: targetUrl as string,
             platform: resolvedPlatform!.id,
@@ -182,7 +190,7 @@ async function textCandidates(note: SourceNote, selected: PlatformId[]) {
             thumbnailUrl: result.thumbnail || null,
             textScore: score,
             imageScore: 0,
-            evidence: [`${engineName}文字命中（${rank}）：${exactPhrase.slice(0, 28)}${exactPhrase.length > 28 ? "…" : ""}`],
+            evidence: [`${engineName}文字命中（${queryKind} · ${rank}）：${exactPhrase.slice(0, 28)}${exactPhrase.length > 28 ? "…" : ""}`],
           } satisfies RawCandidate;
         });
       return { candidates, warnings: [], successful: true };

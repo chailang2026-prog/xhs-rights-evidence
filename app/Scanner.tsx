@@ -20,7 +20,7 @@ type DiagnosticReport = {
 
 const scanSteps = [
   "正在读取笔记中的文字与图片…",
-  "正在检索大众点评、携程等公开页面…",
+  "正在检索大众点评、携程等页面的精确原句与改写内容…",
   "正在用 Google Lens 精确同图、视觉相似与 Bing 查找疑似盗图…",
   "正在计算线索强度并整理结果…",
 ];
@@ -300,7 +300,7 @@ export default function Scanner() {
               <div>{targetPlatforms.map((platform) => <button key={platform.id} type="button" aria-pressed={selectedPlatforms.includes(platform.id)} className={selectedPlatforms.includes(platform.id) ? "selected" : ""} onClick={() => togglePlatform(platform.id)}>{platform.name}<i /></button>)}</div>
             </fieldset>
             <button className="scan-button" type="submit" disabled={scanning}>{scanning ? <><span className="button-spinner" />{scanSteps[scanStep]}</> : <>开始全网匹配 <span>→</span></>}</button>
-            <p className="scan-caption">每次会用 Google Lens 精确同图、视觉相似与 Bing 比对最多 4 张原图，并通过百度与 Google 对正文关键句进行逐平台检索。</p>
+            <p className="scan-caption">每次会用 Google Lens 精确同图、视觉相似与 Bing 比对最多 4 张原图，并通过百度与 Google 检索精确原句和改写特征词。</p>
           </form>
         </section>
 

@@ -65,3 +65,24 @@ export function extractSearchPhrases(note: TextSource) {
   }
   return selected;
 }
+
+export function extractSearchKeywords(note: TextSource) {
+  const candidates: string[] = [];
+  const identifiers: string[] = [];
+  const values = [cleanSearchSegment(note.title), ...extractSearchPhrases(note).slice(0, 3)];
+  for (const value of values) {
+    for (const token of value.match(/[A-Za-z]+\d+[A-Za-z\d-]*|\d{2,}[A-Za-z\d-]*/g) || []) identifiers.push(token);
+    const characters = [...value.replace(/[\s\p{P}\p{S}]+/gu, "")];
+    if (characters.length < 4) continue;
+    const size = Math.min(9, characters.length);
+    const starts = characters.length <= size
+      ? [0]
+      : [0, Math.floor((characters.length - size) / 2), characters.length - size];
+    for (const start of starts) candidates.push(characters.slice(start, start + size).join(""));
+  }
+  const ranked = [...new Set(candidates)].sort((left, right) => phraseScore(right) - phraseScore(left));
+  return [...new Set([...identifiers, ...ranked])]
+    .filter((value) => !/(?:旅行攻略|探店打卡|周末去哪|值得收藏|一定要去|推荐大家)/.test(value))
+    .filter((value, index, all) => all.slice(0, index).every((other) => Math.min([...other].length, [...value].length) < 6 || (!other.includes(value) && !value.includes(other))))
+    .slice(0, 5);
+}

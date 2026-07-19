@@ -33,6 +33,8 @@ test("implements the source-note scanning workflow", async () => {
   assert.match(search, /data\.exact_matches/);
   assert.match(search, /bing_reverse_image/);
   assert.match(search, /createSourceImageProxyUrl/);
+  assert.match(search, /extractSearchKeywords/);
+  assert.match(search, /改写特征词/);
   assert.match(imageRoute, /verifySourceImageProxyUrl/);
   assert.match(imageRoute, /12_000_000/);
   assert.match(diagnosticsRoute, /isSessionValid/);

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { extractSourceNote } from "../lib/source-note.ts";
 import { createSessionToken, isSessionValid, sessionCookie, verifyPassword } from "../lib/auth.ts";
-import { extractSearchPhrases, textSimilarity } from "../lib/matching.ts";
+import { extractSearchKeywords, extractSearchPhrases, textSimilarity } from "../lib/matching.ts";
 import { createSourceImageProxyUrl, isAllowedSourceImageUrl, normalizeSourceImageUrl, verifySourceImageProxyUrl } from "../lib/source-images.ts";
 import { GET as getSourceImage } from "../app/api/source-image/route.ts";
 import { scanPublicWeb } from "../lib/scanner.ts";
@@ -187,6 +187,17 @@ test("builds distinctive search phrases and removes hashtags", () => {
   assert.ok(phrases.length >= 2);
   assert.ok(phrases.every((phrase) => !phrase.includes("#")));
   assert.ok(phrases.some((phrase) => phrase.includes("木栈道")));
+});
+
+test("builds short rewrite-search features and keeps distinctive identifiers", () => {
+  const keywords = extractSearchKeywords({
+    title: "厦门旧城慢走记录",
+    text: "#厦门旅行 走到B17蓝色门牌后从榕树拐角转弯，最后会看见钟楼倒影和隐藏观景台。",
+  });
+  assert.ok(keywords.length >= 3 && keywords.length <= 5);
+  assert.ok(keywords.includes("B17"));
+  assert.ok(keywords.every((keyword) => !keyword.includes("#")));
+  assert.ok(keywords.some((keyword) => keyword.includes("榕树") || keyword.includes("钟楼")));
 });
 
 test("samples the middle and end of a long paragraph instead of searching only its opening", () => {
@@ -401,7 +412,7 @@ test("keeps quoted-text search hits when the result snippet omits the copied sen
     globalThis.fetch = async (value) => {
       const url = new URL(String(value));
       assert.ok(url.searchParams.get("engine") === "baidu" || url.searchParams.get("engine") === "google");
-      assert.match(url.searchParams.get("q") || "", /".+"/);
+      if (!/".+"/.test(url.searchParams.get("q") || "")) return Response.json({ organic_results: [] });
       return Response.json({
         organic_results: [{
           position: 4,
@@ -425,6 +436,55 @@ test("keeps quoted-text search hits when the result snippet omits the copied sen
     assert.ok(result.matches[0].textScore >= 0.36 && result.matches[0].textScore < 0.6);
     assert.match(result.matches[0].snippet, /未提供摘要/);
     assert.ok(result.matches[0].evidence.every((item) => item.includes("文字命中")));
+  } finally {
+    if (previousSerpKey === undefined) delete process.env.SERPAPI_API_KEY;
+    else process.env.SERPAPI_API_KEY = previousSerpKey;
+    if (previousLimit === undefined) delete process.env.SCAN_MAX_TEXT_SEARCHES;
+    else process.env.SCAN_MAX_TEXT_SEARCHES = previousLimit;
+  }
+});
+
+test("finds lightly rewritten text through unquoted features and filters unrelated results", async () => {
+  const previousSerpKey = process.env.SERPAPI_API_KEY;
+  const previousLimit = process.env.SCAN_MAX_TEXT_SEARCHES;
+  process.env.SERPAPI_API_KEY = "test-serp-key";
+  process.env.SCAN_MAX_TEXT_SEARCHES = "4";
+  try {
+    let sawFeatureQuery = false;
+    globalThis.fetch = async (value) => {
+      const url = new URL(String(value));
+      const query = url.searchParams.get("q") || "";
+      if (/".+"/.test(query)) return Response.json({ organic_results: [] });
+      sawFeatureQuery = true;
+      return Response.json({
+        organic_results: [{
+          position: 2,
+          title: "厦门海边小店打卡",
+          link: "https://www.dianping.com/shop/998/review/rewritten",
+          snippet: "白色灯塔转弯后顺着石板路走一小段，看到右侧蓝色木门就到了。",
+        }, {
+          position: 3,
+          title: "北京机场酒店早餐",
+          link: "https://www.dianping.com/shop/111/review/unrelated",
+          snippet: "酒店距离机场二十分钟，早餐供应到上午十点。",
+        }],
+      });
+    };
+
+    const result = await scanPublicWeb({
+      url: "https://www.xiaohongshu.com/explore/source-note",
+      title: "厦门海边餐厅探店",
+      text: "转过白色灯塔之后沿着石板路走七十米，右手边蓝色木门就是这家店。",
+      imageUrls: [],
+      author: "原创作者",
+    }, ["dianping"]);
+
+    assert.equal(sawFeatureQuery, true);
+    assert.equal(result.partial, false);
+    assert.equal(result.matches.length, 1);
+    assert.match(result.matches[0].targetUrl, /rewritten/);
+    assert.ok(result.matches[0].textScore >= 0.32);
+    assert.ok(result.matches[0].evidence.some((item) => item.includes("改写特征词")));
   } finally {
     if (previousSerpKey === undefined) delete process.env.SERPAPI_API_KEY;
     else process.env.SERPAPI_API_KEY = previousSerpKey;
