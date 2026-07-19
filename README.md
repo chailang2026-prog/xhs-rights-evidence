@@ -30,7 +30,7 @@ SCAN_IMAGE_ENGINES=google_lens_exact,google_lens,bing_reverse_image
 
 `SUPABASE_SERVICE_ROLE_KEY` 与 `SERPAPI_API_KEY` 只能配置在服务端环境变量中，禁止写进浏览器代码或提交到 GitHub。`SCAN_MAX_TEXT_SEARCHES` 可选，默认每条笔记最多执行 18 次文字检索；调低会减少 SerpApi 用量，也会降低覆盖率。`SCAN_IMAGE_ENGINES` 默认同时使用 Google Lens 精确同图、Google Lens 视觉相似与 Bing 同图页面；旧配置中的 `google_lens` 会自动同时启用精确同图，若额度有限可删减引擎，但会降低图片侵权线索覆盖率。
 
-图片检索不会直接把可能失效的小红书 CDN 地址交给 Google Lens。应用会生成一个 30 分钟有效、带 HMAC 签名的只读图片代理地址；代理仅允许小红书图片域名、限定图片格式与 12MB 大小，并拒绝任意外部 URL，避免 SSRF。
+图片检索不会直接把可能失效的小红书 CDN 地址交给 Google Lens。应用会生成一个 30 分钟有效、带 HMAC 签名的只读图片代理地址；代理仅允许小红书的 `xhscdn.com`、`xhscdn.net`、官网图片域名和固定 Picasso 素材桶，限定图片格式与 12MB 大小，并拒绝其他云存储桶或任意外部 URL，避免 SSRF。
 
 在 Supabase SQL Editor 中按文件名顺序执行 `supabase/migrations/` 下的全部 SQL。已有数据库至少需要补执行 `002_match_history.sql`，然后：
 

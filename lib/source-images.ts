@@ -1,10 +1,11 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-const allowedImageDomains = ["xhscdn.com", "xiaohongshu.com", "rednote.com"];
+const allowedImageDomains = ["xhscdn.com", "xhscdn.net", "xiaohongshu.com", "rednote.com"];
+const allowedImageHosts = new Set(["picasso-private-1251524319.cos.ap-shanghai.myqcloud.com"]);
 const proxyLifetimeSeconds = 60 * 30;
 
 function allowedImageHost(host: string) {
-  return allowedImageDomains.some((domain) => host === domain || host.endsWith(`.${domain}`));
+  return allowedImageHosts.has(host) || allowedImageDomains.some((domain) => host === domain || host.endsWith(`.${domain}`));
 }
 
 function signingSecret() {

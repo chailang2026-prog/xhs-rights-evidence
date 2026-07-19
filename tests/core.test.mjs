@@ -311,6 +311,9 @@ test("signs short-lived image proxy URLs and rejects tampering or SSRF targets",
     assert.equal(isAllowedSourceImageUrl("http://127.0.0.1/admin.png"), false);
     assert.equal(isAllowedSourceImageUrl("https://evil-xhscdn.com/photo.png"), false);
     assert.equal(normalizeSourceImageUrl("http://sns-webpic-qc.xhscdn.com/photo.png"), "https://sns-webpic-qc.xhscdn.com/photo.png");
+    assert.equal(normalizeSourceImageUrl("http://sns-webpic-qc.xhscdn.net/photo.webp"), "https://sns-webpic-qc.xhscdn.net/photo.webp");
+    assert.equal(normalizeSourceImageUrl("https://picasso-private-1251524319.cos.ap-shanghai.myqcloud.com/data/photo.jpg"), "https://picasso-private-1251524319.cos.ap-shanghai.myqcloud.com/data/photo.jpg");
+    assert.equal(normalizeSourceImageUrl("https://untrusted-bucket.cos.ap-shanghai.myqcloud.com/data/photo.jpg"), null);
     assert.equal(normalizeSourceImageUrl("https://ci.xiaohongshu.com/?imageMogr2/format/jpg"), null);
   } finally {
     if (previousPassword === undefined) delete process.env.APP_PASSWORD;
