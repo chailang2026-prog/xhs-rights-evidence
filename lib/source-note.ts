@@ -8,6 +8,30 @@ function allowedSourceHost(hostname: string) {
   return sourceHosts.some((domain) => host === domain || host.endsWith(`.${domain}`));
 }
 
+function sourceUrlFromInput(input: string) {
+  const trimmed = input.trim();
+  const urlTokens = trimmed.match(/https?:\/\/[^\s<>"'，。！？；、]+/gi) || [];
+  const candidates = [trimmed, ...urlTokens];
+  let sawUrl = false;
+  for (const rawCandidate of candidates) {
+    let candidate = rawCandidate.replace(/[，。！？；、）】》,;!?)\]}]+$/u, "");
+    if (!/^https?:\/\//i.test(candidate) && /^[\w.-]+\//.test(candidate)) candidate = `https://${candidate}`;
+    try {
+      const parsed = new URL(candidate);
+      sawUrl = true;
+      if (!allowedSourceHost(parsed.hostname)) continue;
+      if (parsed.username || parsed.password) throw new Error("小红书链接不能包含用户名或密码。");
+      if (parsed.protocol === "http:") parsed.protocol = "https:";
+      if (parsed.protocol !== "https:") throw new Error("小红书笔记链接必须使用 HTTPS。");
+      return parsed;
+    } catch (error) {
+      if (error instanceof Error && /用户名|必须使用 HTTPS/.test(error.message)) throw error;
+    }
+  }
+  if (sawUrl) throw new Error("目前只支持小红书、xhslink 或 RedNote 的公开笔记链接。");
+  throw new Error("请粘贴小红书笔记链接，或包含该链接的分享文字。");
+}
+
 function decodeEntities(value: string) {
   const named: Record<string, string> = { amp: "&", quot: '"', apos: "'", lt: "<", gt: ">", nbsp: " " };
   return value
@@ -200,15 +224,7 @@ async function fetchNotePage(initialUrl: URL, signal: AbortSignal) {
 }
 
 export async function extractSourceNote(inputUrl: string): Promise<SourceNote> {
-  let parsed: URL;
-  try {
-    parsed = new URL(inputUrl);
-  } catch {
-    throw new Error("请粘贴有效的小红书笔记链接。");
-  }
-  if (parsed.protocol === "http:") parsed.protocol = "https:";
-  if (parsed.protocol !== "https:") throw new Error("小红书笔记链接必须使用 HTTPS。");
-  if (!allowedSourceHost(parsed.hostname)) throw new Error("目前只支持小红书、xhslink 或 RedNote 的公开笔记链接。");
+  const parsed = sourceUrlFromInput(inputUrl);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15000);

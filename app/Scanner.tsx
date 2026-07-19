@@ -290,10 +290,10 @@ export default function Scanner() {
             <p>读取笔记文字和图片，在旅行出游、生活探店平台的公开网页中寻找疑似搬运、盗图或改写内容。</p>
           </div>
           <form className="scan-panel" onSubmit={startScan}>
-            <div className="scan-panel-head"><div><span>STEP 01</span><h2>粘贴小红书笔记链接</h2></div><div className="live-dot">公开索引检索</div></div>
+            <div className="scan-panel-head"><div><span>STEP 01</span><h2>粘贴笔记链接或分享文字</h2></div><div className="live-dot">公开索引检索</div></div>
             <label className="url-field">
               <span className="link-icon">↗</span>
-              <input type="url" value={noteUrl} onChange={(event) => setNoteUrl(event.target.value)} required disabled={scanning} placeholder="https://www.xiaohongshu.com/explore/…" inputMode="url" aria-label="小红书笔记链接" />
+              <input type="text" value={noteUrl} onChange={(event) => setNoteUrl(event.target.value)} required disabled={scanning} placeholder="粘贴链接，或小红书复制出的整段分享文字" inputMode="url" autoCapitalize="none" autoCorrect="off" aria-label="小红书笔记链接或分享文字" />
             </label>
             <fieldset className="platform-picker">
               <legend>重点扫描平台</legend>

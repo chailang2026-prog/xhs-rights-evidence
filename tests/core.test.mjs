@@ -76,6 +76,38 @@ test("extracts public note metadata without pulling unrelated page content", asy
   assert.doesNotMatch(note.title, /不相关热榜/);
 });
 
+test("accepts the full Xiaohongshu mobile share text and extracts its trusted URL", async () => {
+  let requestedUrl = "";
+  globalThis.fetch = async (value) => {
+    requestedUrl = String(value);
+    return {
+      ok: true,
+      status: 200,
+      url: "https://www.xiaohongshu.com/explore/abc123",
+      headers: new Headers({ "content-length": "500" }),
+      text: async () => `<!doctype html><meta property="og:title" content="福州烟台山散步路线"><meta property="og:description" content="从乐群路沿着石阶走到观景台，傍晚可以看到江面日落。">`,
+    };
+  };
+
+  const note = await extractSourceNote("76 原创作者发布了一篇小红书笔记，快来看吧！ https://xhslink.com/example，复制本条信息打开小红书");
+  assert.equal(requestedUrl, "https://xhslink.com/example");
+  assert.equal(note.title, "福州烟台山散步路线");
+  assert.match(note.text, /江面日落/);
+});
+
+test("rejects credentials embedded in a Xiaohongshu source URL before fetching", async () => {
+  let fetched = false;
+  globalThis.fetch = async () => {
+    fetched = true;
+    return Response.json({});
+  };
+  await assert.rejects(
+    extractSourceNote("https://name:password@www.xiaohongshu.com/explore/abc123"),
+    /不能包含用户名或密码/,
+  );
+  assert.equal(fetched, false);
+});
+
 test("extracts the current Xiaohongshu initial-state note object and one URL per original image", async () => {
   globalThis.fetch = async () => ({
     ok: true,

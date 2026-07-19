@@ -15,6 +15,7 @@ test("implements the source-note scanning workflow", async () => {
   ]);
 
   assert.match(scanner, /贴入一条笔记/);
+  assert.match(scanner, /链接或分享文字/);
   assert.match(scanner, /大众点评/);
   assert.match(scanner, /Google Lens/);
   assert.match(scanner, /疑似侵权线索/);
