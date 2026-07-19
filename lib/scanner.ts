@@ -23,6 +23,7 @@ type SerpResponse = {
   error?: string;
   organic_results?: SearchResult[];
   visual_matches?: SearchResult[];
+  exact_matches?: SearchResult[];
   pages_with_this_image?: SearchResult[];
 };
 
@@ -51,7 +52,7 @@ type TextQuery = {
   engine: "baidu" | "google";
 };
 
-type ImageSearchEngine = "google_lens" | "bing_reverse_image";
+type ImageSearchEngine = "google_lens_exact" | "google_lens" | "bing_reverse_image";
 
 type ImageQuery = {
   imageUrl: string;
@@ -128,12 +129,16 @@ function textSearchLimit() {
 }
 
 function imageSearchEngines(): ImageSearchEngine[] {
-  const allowed = new Set<ImageSearchEngine>(["google_lens", "bing_reverse_image"]);
-  const configured = (process.env.SCAN_IMAGE_ENGINES || "google_lens,bing_reverse_image")
+  const allowed = new Set<ImageSearchEngine>(["google_lens_exact", "google_lens", "bing_reverse_image"]);
+  const configured = (process.env.SCAN_IMAGE_ENGINES || "google_lens_exact,google_lens,bing_reverse_image")
     .split(",")
     .map((value) => value.trim())
     .filter((value): value is ImageSearchEngine => allowed.has(value as ImageSearchEngine));
-  return [...new Set(configured)].length ? [...new Set(configured)] : ["google_lens", "bing_reverse_image"];
+  const enabled = new Set(configured);
+  // Keep deployments created with the previous `google_lens` value thorough:
+  // visual Lens searches automatically include the dedicated exact-match tab.
+  if (enabled.has("google_lens")) enabled.add("google_lens_exact");
+  return enabled.size ? [...enabled] : ["google_lens_exact", "google_lens", "bing_reverse_image"];
 }
 
 function errorMessage(error: unknown) {
@@ -162,7 +167,10 @@ async function textCandidates(note: SourceNote, selected: PlatformId[]) {
         .filter((item) => item.targetUrl && item.resolvedPlatform && selected.includes(item.resolvedPlatform.id) && (platform.id === "web" || item.resolvedPlatform.id === platform.id))
         .map(({ result, targetUrl, resolvedPlatform }) => {
           const candidateText = `${result.title || ""} ${result.snippet || ""}`;
-          const score = Math.max(...phrases.map((item) => textSimilarity(item, candidateText)), textSimilarity(note.title, candidateText));
+          const measuredScore = Math.max(...phrases.map((item) => textSimilarity(item, candidateText)), textSimilarity(note.title, candidateText));
+          // Search engines sometimes omit the matched sentence from their snippet. A result
+          // returned for the quoted source phrase remains a useful lead, but at low strength.
+          const score = Math.max(measuredScore, 0.36);
           const rank = Number.isFinite(result.position) ? `第 ${result.position} 位` : "公开结果";
           const engineName = engine === "baidu" ? "百度" : "Google";
           return {
@@ -199,17 +207,19 @@ async function imageCandidates(note: SourceNote, selected: PlatformId[], publicO
   const batches = await mapLimit(queries, 3, async ({ imageUrl, imageIndex, engine }) => {
     try {
       const proxyUrl = createSourceImageProxyUrl(imageUrl, { origin: publicOrigin });
-      const data = await serpApi(engine === "google_lens"
-        ? { engine, url: proxyUrl, type: "visual_matches", hl: "zh-CN", country: "cn", safe: "active" }
-        : { engine, image_url: proxyUrl, mkt: "zh-CN", count: "50" });
-      const rawResults = engine === "google_lens" ? (data.visual_matches || []) : (data.pages_with_this_image || []);
+      const data = await serpApi(engine === "bing_reverse_image"
+        ? { engine, image_url: proxyUrl, mkt: "zh-CN", count: "50" }
+        : { engine: "google_lens", url: proxyUrl, type: engine === "google_lens_exact" ? "exact_matches" : "visual_matches", hl: "zh-CN", country: "cn", safe: "active" });
+      const rawResults = engine === "google_lens_exact"
+        ? (data.exact_matches || [])
+        : engine === "google_lens" ? (data.visual_matches || []) : (data.pages_with_this_image || []);
       const candidates = rawResults.slice(0, 40).map((result, resultIndex) => {
         const rawTargetUrl = engine === "bing_reverse_image" ? result.source : result.link;
         const targetUrl = rawTargetUrl ? canonicalUrl(rawTargetUrl) : null;
         const position = Number.isFinite(result.position) ? Number(result.position) : resultIndex + 1;
         return { result, targetUrl, position, platform: targetUrl ? platformForUrl(targetUrl) : null };
       }).filter((item) => item.targetUrl && item.platform && selected.includes(item.platform.id)).map(({ result, targetUrl, position, platform }) => {
-        const googleExact = engine === "google_lens" && result.exact_matches === true;
+        const googleExact = engine === "google_lens_exact" || (engine === "google_lens" && result.exact_matches === true);
         const imageScore = engine === "bing_reverse_image"
           ? 0.96
           : googleExact ? 0.98 : position <= 3 ? 0.88 : position <= 10 ? 0.82 : position <= 20 ? 0.77 : 0.73;
@@ -236,7 +246,7 @@ async function imageCandidates(note: SourceNote, selected: PlatformId[], publicO
       });
       return { candidates, warnings: [], successful: true };
     } catch (error) {
-      const engineName = engine === "google_lens" ? "Google Lens" : "Bing";
+      const engineName = engine === "google_lens_exact" ? "Google Lens 精确同图" : engine === "google_lens" ? "Google Lens 视觉相似" : "Bing";
       return { candidates: [] as RawCandidate[], warnings: [`第 ${imageIndex + 1} 张图片的 ${engineName} 检索失败：${errorMessage(error)}`], successful: false };
     }
   });

@@ -29,6 +29,8 @@ test("implements the source-note scanning workflow", async () => {
   assert.match(rerunRoute, /refreshScanSource/);
   assert.match(search, /\["baidu", "google"\]/);
   assert.match(search, /engine === "google_lens"/);
+  assert.match(search, /google_lens_exact/);
+  assert.match(search, /data\.exact_matches/);
   assert.match(search, /bing_reverse_image/);
   assert.match(search, /createSourceImageProxyUrl/);
   assert.match(imageRoute, /verifySourceImageProxyUrl/);

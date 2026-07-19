@@ -68,18 +68,20 @@ function siteCheck(): DiagnosticCheck {
 
 function scanConfigCheck(): DiagnosticCheck {
   const textLimit = Number(process.env.SCAN_MAX_TEXT_SEARCHES || 18);
-  const imageEngines = (process.env.SCAN_IMAGE_ENGINES || "google_lens,bing_reverse_image").split(",").map((value) => value.trim()).filter(Boolean);
-  const validEngines = imageEngines.filter((value) => value === "google_lens" || value === "bing_reverse_image");
+  const imageEngines = (process.env.SCAN_IMAGE_ENGINES || "google_lens_exact,google_lens,bing_reverse_image").split(",").map((value) => value.trim()).filter(Boolean);
+  const validEngines = imageEngines.filter((value) => value === "google_lens_exact" || value === "google_lens" || value === "bing_reverse_image");
   const hasInvalidEngine = validEngines.length !== imageEngines.length;
   if (!Number.isFinite(textLimit) || textLimit <= 0 || validEngines.length === 0) {
     return { id: "scan-config", label: "扫描配置", status: "error", detail: "文字查询预算或图片引擎配置无效。" };
   }
+  const effectiveEngines = new Set(validEngines);
+  if (effectiveEngines.has("google_lens")) effectiveEngines.add("google_lens_exact");
   const effectiveTextLimit = Math.max(4, Math.min(36, Math.round(textLimit)));
   return {
     id: "scan-config",
     label: "扫描配置",
-    status: validEngines.length < 2 || hasInvalidEngine ? "warning" : "ok",
-    detail: `文字查询上限 ${effectiveTextLimit} 次；图片引擎 ${validEngines.join(" + ")}。`,
+    status: effectiveEngines.size < 3 || hasInvalidEngine ? "warning" : "ok",
+    detail: `文字查询上限 ${effectiveTextLimit} 次；图片引擎 ${[...effectiveEngines].join(" + ")}。`,
   };
 }
 

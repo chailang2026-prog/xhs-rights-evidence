@@ -25,10 +25,10 @@ SUPABASE_SERVICE_ROLE_KEY=服务端专用密钥
 SERPAPI_API_KEY=SerpApi密钥
 NEXT_PUBLIC_SITE_URL=https://你的正式域名
 SCAN_MAX_TEXT_SEARCHES=18
-SCAN_IMAGE_ENGINES=google_lens,bing_reverse_image
+SCAN_IMAGE_ENGINES=google_lens_exact,google_lens,bing_reverse_image
 ```
 
-`SUPABASE_SERVICE_ROLE_KEY` 与 `SERPAPI_API_KEY` 只能配置在服务端环境变量中，禁止写进浏览器代码或提交到 GitHub。`SCAN_MAX_TEXT_SEARCHES` 可选，默认每条笔记最多执行 18 次文字检索；调低会减少 SerpApi 用量，也会降低覆盖率。`SCAN_IMAGE_ENGINES` 默认同时使用 Google Lens 与 Bing，若额度有限可只填写其中一个引擎。
+`SUPABASE_SERVICE_ROLE_KEY` 与 `SERPAPI_API_KEY` 只能配置在服务端环境变量中，禁止写进浏览器代码或提交到 GitHub。`SCAN_MAX_TEXT_SEARCHES` 可选，默认每条笔记最多执行 18 次文字检索；调低会减少 SerpApi 用量，也会降低覆盖率。`SCAN_IMAGE_ENGINES` 默认同时使用 Google Lens 精确同图、Google Lens 视觉相似与 Bing 同图页面；旧配置中的 `google_lens` 会自动同时启用精确同图，若额度有限可删减引擎，但会降低图片侵权线索覆盖率。
 
 图片检索不会直接把可能失效的小红书 CDN 地址交给 Google Lens。应用会生成一个 30 分钟有效、带 HMAC 签名的只读图片代理地址；代理仅允许小红书图片域名、限定图片格式与 12MB 大小，并拒绝任意外部 URL，避免 SSRF。
 
@@ -61,4 +61,4 @@ npm test
 | 高德地图 | `amap.com`, `gaode.com` |
 | 其他公开网页 | 除小红书和搜索引擎本身之外的公开域名 |
 
-文字检索从正文选取最多三个有区分度的关键句，在查询预算内交叉使用百度和 Google 逐平台检索；图片检索最多处理原笔记前四张图片，并合并 Google Lens 视觉/精确结果与 Bing 的同图页面。图片分数是根据精确匹配标记、视觉结果排序、搜索引擎交叉命中以及同一页面命中的原图数量形成的“线索强度”，不是侵权概率。重新扫描会先刷新小红书正文和可能已过期的原图地址。已经收集的链接不会因为后续搜索暂时未命中而被删除；系统保留首次发现、最近命中与本轮状态。单个查询失败不会丢弃其他已成功的结果，匹配结果按综合线索强度排序并可导出 CSV。
+文字检索从正文选取最多三个有区分度的关键句，在查询预算内交叉使用百度和 Google 逐平台检索；即使搜索摘要没有展示命中的原句，也会以较低强度保留带引号原文查询返回的可疑链接，避免漏报。图片检索最多处理原笔记前四张图片，并分别请求 Google Lens 精确同图、Google Lens 视觉相似和 Bing 同图页面。图片分数是根据精确匹配、视觉结果排序、搜索引擎交叉命中以及同一页面命中的原图数量形成的“线索强度”，不是侵权概率。重新扫描会先刷新小红书正文和可能已过期的原图地址。已经收集的链接不会因为后续搜索暂时未命中而被删除；系统保留首次发现、最近命中与本轮状态。单个查询失败不会丢弃其他已成功的结果，匹配结果按综合线索强度排序并可导出 CSV。

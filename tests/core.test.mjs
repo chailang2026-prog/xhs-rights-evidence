@@ -273,6 +273,7 @@ test("combines copied text and Lens image evidence into one reviewable link", as
   process.env.SCAN_IMAGE_ENGINES = "google_lens";
   try {
     const engines = new Set();
+    const lensTypes = new Set();
     globalThis.fetch = async (value) => {
       const url = new URL(String(value));
       assert.equal(url.hostname, "serpapi.com");
@@ -280,6 +281,8 @@ test("combines copied text and Lens image evidence into one reviewable link", as
       engines.add(engine);
       if (engine === "google_lens") {
         assert.match(url.searchParams.get("url") || "", /^https:\/\/radar\.example\/api\/source-image/);
+        lensTypes.add(url.searchParams.get("type"));
+        if (url.searchParams.get("type") === "exact_matches") return Response.json({ exact_matches: [] });
         return Response.json({
           visual_matches: [{
             position: 1,
@@ -327,6 +330,7 @@ test("combines copied text and Lens image evidence into one reviewable link", as
     assert.ok(result.matches[0].evidence.some((item) => item.startsWith("Google Lens 精确图片命中")));
     assert.doesNotMatch(result.matches[0].targetUrl, /utm_source/);
     assert.deepEqual([...engines].sort(), ["baidu", "google", "google_lens"]);
+    assert.deepEqual([...lensTypes].sort(), ["exact_matches", "visual_matches"]);
   } finally {
     if (previousPassword === undefined) delete process.env.APP_PASSWORD;
     else process.env.APP_PASSWORD = previousPassword;
@@ -388,6 +392,47 @@ test("covers every named travel platform across Baidu and Google results", async
   }
 });
 
+test("keeps quoted-text search hits when the result snippet omits the copied sentence", async () => {
+  const previousSerpKey = process.env.SERPAPI_API_KEY;
+  const previousLimit = process.env.SCAN_MAX_TEXT_SEARCHES;
+  process.env.SERPAPI_API_KEY = "test-serp-key";
+  process.env.SCAN_MAX_TEXT_SEARCHES = "4";
+  try {
+    globalThis.fetch = async (value) => {
+      const url = new URL(String(value));
+      assert.ok(url.searchParams.get("engine") === "baidu" || url.searchParams.get("engine") === "google");
+      assert.match(url.searchParams.get("q") || "", /".+"/);
+      return Response.json({
+        organic_results: [{
+          position: 4,
+          title: "海边餐厅打卡记录",
+          link: "https://www.dianping.com/shop/998/review/776",
+        }],
+      });
+    };
+
+    const result = await scanPublicWeb({
+      url: "https://www.xiaohongshu.com/explore/source-note",
+      title: "厦门海边餐厅探店",
+      text: "转过白色灯塔之后沿着石板路走七十米，右手边蓝色木门就是这家店。",
+      imageUrls: [],
+      author: "原创作者",
+    }, ["dianping"]);
+
+    assert.equal(result.partial, false);
+    assert.equal(result.matches.length, 1);
+    assert.equal(result.matches[0].platform, "dianping");
+    assert.ok(result.matches[0].textScore >= 0.36 && result.matches[0].textScore < 0.6);
+    assert.match(result.matches[0].snippet, /未提供摘要/);
+    assert.ok(result.matches[0].evidence.every((item) => item.includes("文字命中")));
+  } finally {
+    if (previousSerpKey === undefined) delete process.env.SERPAPI_API_KEY;
+    else process.env.SERPAPI_API_KEY = previousSerpKey;
+    if (previousLimit === undefined) delete process.env.SCAN_MAX_TEXT_SEARCHES;
+    else process.env.SCAN_MAX_TEXT_SEARCHES = previousLimit;
+  }
+});
+
 test("raises image lead strength when multiple original images point to the same page", async () => {
   const previousPassword = process.env.APP_PASSWORD;
   const previousSiteUrl = process.env.NEXT_PUBLIC_SITE_URL;
@@ -400,8 +445,10 @@ test("raises image lead strength when multiple original images point to the same
   try {
     let imageSearches = 0;
     globalThis.fetch = async (value) => {
-      const engine = new URL(String(value)).searchParams.get("engine");
+      const url = new URL(String(value));
+      const engine = url.searchParams.get("engine");
       assert.equal(engine, "google_lens");
+      if (url.searchParams.get("type") === "exact_matches") return Response.json({ exact_matches: [] });
       imageSearches += 1;
       return Response.json({
         visual_matches: [{
@@ -428,6 +475,56 @@ test("raises image lead strength when multiple original images point to the same
     assert.equal(result.matches[0].matchType, "图片相似");
     assert.equal(result.matches[0].imageScore, 0.91);
     assert.equal(result.matches[0].evidence.length, 2);
+  } finally {
+    if (previousPassword === undefined) delete process.env.APP_PASSWORD;
+    else process.env.APP_PASSWORD = previousPassword;
+    if (previousSiteUrl === undefined) delete process.env.NEXT_PUBLIC_SITE_URL;
+    else process.env.NEXT_PUBLIC_SITE_URL = previousSiteUrl;
+    if (previousSerpKey === undefined) delete process.env.SERPAPI_API_KEY;
+    else process.env.SERPAPI_API_KEY = previousSerpKey;
+    if (previousImageEngines === undefined) delete process.env.SCAN_IMAGE_ENGINES;
+    else process.env.SCAN_IMAGE_ENGINES = previousImageEngines;
+  }
+});
+
+test("collects the dedicated Google Lens exact-matches result set", async () => {
+  const previousPassword = process.env.APP_PASSWORD;
+  const previousSiteUrl = process.env.NEXT_PUBLIC_SITE_URL;
+  const previousSerpKey = process.env.SERPAPI_API_KEY;
+  const previousImageEngines = process.env.SCAN_IMAGE_ENGINES;
+  process.env.APP_PASSWORD = "a-strong-private-password";
+  process.env.NEXT_PUBLIC_SITE_URL = "https://radar.example";
+  process.env.SERPAPI_API_KEY = "test-serp-key";
+  process.env.SCAN_IMAGE_ENGINES = "google_lens_exact";
+  try {
+    globalThis.fetch = async (value) => {
+      const url = new URL(String(value));
+      assert.equal(url.searchParams.get("engine"), "google_lens");
+      assert.equal(url.searchParams.get("type"), "exact_matches");
+      assert.match(url.searchParams.get("url") || "", /^https:\/\/radar\.example\/api\/source-image/);
+      return Response.json({
+        exact_matches: [{
+          position: 1,
+          title: "携程上的原图攻略",
+          link: "https://you.ctrip.com/travels/qingdao5/9988.html",
+          thumbnail: "https://images.example/exact.webp",
+        }],
+      });
+    };
+
+    const result = await scanPublicWeb({
+      url: "https://www.xiaohongshu.com/explore/source-note",
+      title: "短标题",
+      text: "短正文",
+      imageUrls: ["https://sns-webpic-qc.xhscdn.com/notes/source.webp"],
+      author: null,
+    }, ["ctrip"], "https://radar.example");
+
+    assert.equal(result.partial, false);
+    assert.equal(result.matches.length, 1);
+    assert.equal(result.matches[0].platform, "ctrip");
+    assert.equal(result.matches[0].imageScore, 0.98);
+    assert.match(result.matches[0].evidence[0], /^Google Lens 精确图片命中/);
   } finally {
     if (previousPassword === undefined) delete process.env.APP_PASSWORD;
     else process.env.APP_PASSWORD = previousPassword;
