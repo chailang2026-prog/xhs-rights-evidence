@@ -9,7 +9,7 @@ export const targetPlatforms: Array<{
   { id: "dianping", name: "大众点评", domains: ["dianping.com"] },
   { id: "ctrip", name: "携程", domains: ["ctrip.com", "trip.com"] },
   { id: "qunar", name: "去哪儿", domains: ["qunar.com"] },
-  { id: "fliggy", name: "飞猪", domains: ["fliggy.com", "alitrip.com"] },
+  { id: "fliggy", name: "飞猪", domains: ["fliggy.com", "alitrip.com", "travel.taobao.com", "trip.taobao.com"] },
   { id: "amap", name: "高德地图", domains: ["amap.com", "gaode.com"] },
   { id: "web", name: "其他公开网页", domains: [] },
 ];

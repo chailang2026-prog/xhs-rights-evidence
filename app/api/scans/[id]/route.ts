@@ -1,6 +1,7 @@
 import { isSessionValid, unauthorized } from "../../../../lib/auth";
 import { scanPublicWeb } from "../../../../lib/scanner";
-import { deleteScan, finishScan, getScan, markScanRunning, replaceMatches } from "../../../../lib/supabase";
+import { extractSourceNote } from "../../../../lib/source-note";
+import { deleteScan, finishScan, getScan, markScanRunning, refreshScanSource, replaceMatches } from "../../../../lib/supabase";
 import { publicRequestOrigin } from "../../../../lib/request-origin.ts";
 
 export const runtime = "nodejs";
@@ -12,15 +13,29 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   try {
     const scan = await getScan(id);
     await markScanRunning(id);
-    const result = await scanPublicWeb({
+    let source = {
       url: scan.sourceUrl,
       title: scan.sourceTitle,
       text: scan.sourceText,
       imageUrls: scan.sourceImages,
       author: scan.sourceAuthor,
-    }, scan.selectedPlatforms, publicRequestOrigin(request));
+    };
+    let refreshWarning = "";
+    try {
+      const refreshedSource = await extractSourceNote(scan.sourceUrl);
+      source = refreshedSource;
+      try {
+        await refreshScanSource(id, refreshedSource);
+      } catch (error) {
+        refreshWarning = `已读取最新原笔记，但未能更新已保存的图文：${error instanceof Error ? error.message : String(error)}`;
+      }
+    } catch (error) {
+      refreshWarning = `原笔记刷新失败，已使用上次保存的图文：${error instanceof Error ? error.message : String(error)}`;
+    }
+    const result = await scanPublicWeb(source, scan.selectedPlatforms, publicRequestOrigin(request));
+    const warnings = [...new Set([refreshWarning, ...result.warnings].filter(Boolean))];
     await replaceMatches(id, result.matches);
-    await finishScan(id, result.partial ? "部分完成" : "已完成", result.warnings.join("；") || null);
+    await finishScan(id, result.partial || Boolean(refreshWarning) ? "部分完成" : "已完成", warnings.join("；") || null);
     return Response.json({ scan: await getScan(id) });
   } catch (error) {
     console.error(error);

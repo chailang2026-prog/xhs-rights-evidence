@@ -8,11 +8,13 @@ import { extractSearchPhrases, textSimilarity } from "./matching.ts";
 import { createSourceImageProxyUrl } from "./source-images.ts";
 
 type SearchResult = {
+  position?: number;
   title?: string;
   link?: string;
   snippet?: string;
   thumbnail?: string;
   source?: string;
+  exact_matches?: boolean;
 };
 
 type SerpResponse = {
@@ -43,6 +45,7 @@ type CandidateBatch = {
 type TextQuery = {
   platform: (typeof targetPlatforms)[number];
   phrase: string;
+  engine: "baidu" | "google";
 };
 
 function apiKey() {
@@ -67,8 +70,10 @@ async function serpApi(parameters: Record<string, string>) {
 
 function platformForUrl(value: string) {
   try {
-    const host = new URL(value).hostname.toLowerCase();
-    if (["xiaohongshu.com", "xhslink.com", "google.com", "baidu.com", "serpapi.com"].some((domain) => host === domain || host.endsWith(`.${domain}`))) return null;
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    const host = url.hostname.toLowerCase();
+    if (["xiaohongshu.com", "xhslink.com", "xhs.cn", "rednote.com", "google.com", "baidu.com", "serpapi.com"].some((domain) => host === domain || host.endsWith(`.${domain}`))) return null;
     return targetPlatforms.find((platform) => platform.domains.some((domain) => host === domain || host.endsWith(`.${domain}`)))
       || targetPlatforms.find((platform) => platform.id === "web")
       || null;
@@ -80,13 +85,15 @@ function platformForUrl(value: string) {
 function canonicalUrl(value: string) {
   try {
     const url = new URL(value);
+    if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) return null;
     url.hash = "";
     for (const key of [...url.searchParams.keys()]) {
       if (/^(utm_|spm|from|source|ref|share)/i.test(key)) url.searchParams.delete(key);
     }
+    if (url.pathname !== "/") url.pathname = url.pathname.replace(/\/+$/, "");
     return url.toString();
   } catch {
-    return value;
+    return null;
   }
 }
 
@@ -105,8 +112,8 @@ async function mapLimit<T, R>(items: T[], limit: number, task: (item: T, index: 
 }
 
 function textSearchLimit() {
-  const configured = Number(process.env.SCAN_MAX_TEXT_SEARCHES || 12);
-  return Number.isFinite(configured) ? Math.max(6, Math.min(24, Math.round(configured))) : 12;
+  const configured = Number(process.env.SCAN_MAX_TEXT_SEARCHES || 18);
+  return Number.isFinite(configured) ? Math.max(4, Math.min(36, Math.round(configured))) : 18;
 }
 
 function errorMessage(error: unknown) {
@@ -117,20 +124,29 @@ async function textCandidates(note: SourceNote, selected: PlatformId[]) {
   const phrases = extractSearchPhrases(note);
   if (!phrases.length) return { candidates: [], warnings: [], attemptedQueries: 0, successfulQueries: 0 } satisfies CandidateBatch;
   const platforms = targetPlatforms.filter((platform) => selected.includes(platform.id));
-  const queries: TextQuery[] = phrases.slice(0, 2).flatMap((phrase) => platforms.map((platform) => ({ platform, phrase }))).slice(0, textSearchLimit());
-  const batches = await mapLimit(queries, 3, async ({ platform, phrase }) => {
+  const queries: TextQuery[] = phrases.slice(0, 3).flatMap((phrase) => (["baidu", "google"] as const)
+    .flatMap((engine) => platforms.map((platform) => ({ platform, phrase, engine })))).slice(0, textSearchLimit());
+  const batches = await mapLimit(queries, 3, async ({ platform, phrase, engine }) => {
     const exactPhrase = phrase.replace(/"/g, "");
     try {
       const domainClause = platform.domains.map((domain) => `site:${domain}`).join(" OR ");
-      const data = await serpApi({ engine: "baidu", q: domainClause ? `(${domainClause}) \"${exactPhrase}\"` : `\"${exactPhrase}\"`, rn: "20" });
+      const query = domainClause ? `(${domainClause}) \"${exactPhrase}\"` : `\"${exactPhrase}\"`;
+      const data = await serpApi(engine === "baidu"
+        ? { engine, q: query, rn: "20" }
+        : { engine, q: query, num: "20", hl: "zh-cn", gl: "cn", safe: "active", filter: "0" });
       const candidates = (data.organic_results || [])
-        .map((result) => ({ result, resolvedPlatform: result.link ? platformForUrl(result.link) : null }))
-        .filter((item) => item.result.link && item.resolvedPlatform && selected.includes(item.resolvedPlatform.id) && (platform.id === "web" || item.resolvedPlatform.id === platform.id))
-        .map(({ result, resolvedPlatform }) => {
+        .map((result) => {
+          const targetUrl = result.link ? canonicalUrl(result.link) : null;
+          return { result, targetUrl, resolvedPlatform: targetUrl ? platformForUrl(targetUrl) : null };
+        })
+        .filter((item) => item.targetUrl && item.resolvedPlatform && selected.includes(item.resolvedPlatform.id) && (platform.id === "web" || item.resolvedPlatform.id === platform.id))
+        .map(({ result, targetUrl, resolvedPlatform }) => {
           const candidateText = `${result.title || ""} ${result.snippet || ""}`;
           const score = Math.max(...phrases.map((item) => textSimilarity(item, candidateText)), textSimilarity(note.title, candidateText));
+          const rank = Number.isFinite(result.position) ? `第 ${result.position} 位` : "公开结果";
+          const engineName = engine === "baidu" ? "百度" : "Google";
           return {
-            targetUrl: canonicalUrl(result.link as string),
+            targetUrl: targetUrl as string,
             platform: resolvedPlatform!.id,
             platformName: resolvedPlatform!.name,
             title: result.title || `${resolvedPlatform!.name}上的疑似相似内容`,
@@ -138,12 +154,13 @@ async function textCandidates(note: SourceNote, selected: PlatformId[]) {
             thumbnailUrl: result.thumbnail || null,
             textScore: score,
             imageScore: 0,
-            evidence: [`文字命中：${exactPhrase.slice(0, 28)}${exactPhrase.length > 28 ? "…" : ""}`],
+            evidence: [`${engineName}文字命中（${rank}）：${exactPhrase.slice(0, 28)}${exactPhrase.length > 28 ? "…" : ""}`],
           } satisfies RawCandidate;
         });
       return { candidates, warnings: [], successful: true };
     } catch (error) {
-      return { candidates: [] as RawCandidate[], warnings: [`${platform.name}文字检索失败：${errorMessage(error)}`], successful: false };
+      const engineName = engine === "baidu" ? "百度" : "Google";
+      return { candidates: [] as RawCandidate[], warnings: [`${platform.name}${engineName}文字检索失败：${errorMessage(error)}`], successful: false };
     }
   });
   return {
@@ -168,19 +185,33 @@ async function imageCandidates(note: SourceNote, selected: PlatformId[], publicO
         safe: "active",
       });
       const candidates = (data.visual_matches || [])
-        .map((result) => ({ result, platform: result.link ? platformForUrl(result.link) : null }))
-        .filter((item) => item.result.link && item.platform && selected.includes(item.platform.id))
-        .map(({ result, platform }) => ({
-          targetUrl: canonicalUrl(result.link as string),
-          platform: platform!.id,
-          platformName: platform!.name,
-          title: result.title || `${platform!.name}上的疑似盗图内容`,
-          snippet: `Google Lens 在公开网页中发现了与原笔记第 ${imageIndex + 1} 张图片相似的内容。`,
-          thumbnailUrl: result.thumbnail || result.image || null,
-          textScore: 0,
-          imageScore: 0.84,
-          evidence: [`图片视觉匹配：原笔记第 ${imageIndex + 1} 张图`],
-        } satisfies RawCandidate));
+        .slice(0, 40)
+        .map((result, resultIndex) => {
+          const targetUrl = result.link ? canonicalUrl(result.link) : null;
+          const position = Number.isFinite(result.position) ? Number(result.position) : resultIndex + 1;
+          return { result, targetUrl, position, platform: targetUrl ? platformForUrl(targetUrl) : null };
+        })
+        .filter((item) => item.targetUrl && item.platform && selected.includes(item.platform.id))
+        .map(({ result, targetUrl, position, platform }) => {
+          const exact = result.exact_matches === true;
+          const imageScore = exact ? 0.98 : position <= 3 ? 0.88 : position <= 10 ? 0.82 : position <= 20 ? 0.77 : 0.73;
+          const evidence = exact
+            ? `Google Lens 精确图片命中：原笔记第 ${imageIndex + 1} 张图`
+            : `Google Lens 视觉匹配（第 ${position} 位）：原笔记第 ${imageIndex + 1} 张图`;
+          return {
+            targetUrl: targetUrl as string,
+            platform: platform!.id,
+            platformName: platform!.name,
+            title: result.title || `${platform!.name}上的疑似盗图内容`,
+            snippet: exact
+              ? `Google Lens 将该公开网页标记为原笔记第 ${imageIndex + 1} 张图片的精确匹配。`
+              : `Google Lens 在公开网页中发现了与原笔记第 ${imageIndex + 1} 张图片视觉相似的内容，排序第 ${position} 位。`,
+            thumbnailUrl: result.thumbnail || result.image || null,
+            textScore: 0,
+            imageScore,
+            evidence: [evidence],
+          } satisfies RawCandidate;
+        });
       return { candidates, warnings: [], successful: true };
     } catch (error) {
       return { candidates: [] as RawCandidate[], warnings: [`第 ${imageIndex + 1} 张图片检索失败：${errorMessage(error)}`], successful: false };
@@ -232,10 +263,14 @@ export async function scanPublicWeb(note: SourceNote, selectedPlatforms: Platfor
 
   const matches: CandidateMatch[] = [...merged.values()]
     .map((candidate) => {
-      const both = candidate.textScore >= 0.38 && candidate.imageScore >= 0.7;
+      const textEvidenceCount = candidate.evidence.filter((item) => item.includes("文字命中")).length;
+      const imageEvidenceCount = candidate.evidence.filter((item) => item.startsWith("Google Lens")).length;
+      const textScore = Math.min(0.98, candidate.textScore + Math.min(0.06, Math.max(0, textEvidenceCount - 1) * 0.02));
+      const imageScore = Math.min(0.98, candidate.imageScore + Math.min(0.08, Math.max(0, imageEvidenceCount - 1) * 0.03));
+      const both = textScore >= 0.38 && imageScore >= 0.7;
       const overall = both
-        ? candidate.textScore * 0.45 + candidate.imageScore * 0.55 + 0.08
-        : Math.max(candidate.textScore, candidate.imageScore);
+        ? textScore * 0.45 + imageScore * 0.55 + 0.08
+        : Math.max(textScore, imageScore);
       return {
         targetUrl: candidate.targetUrl,
         platform: candidate.platform,
@@ -243,10 +278,10 @@ export async function scanPublicWeb(note: SourceNote, selectedPlatforms: Platfor
         title: candidate.title,
         snippet: candidate.snippet,
         thumbnailUrl: candidate.thumbnailUrl,
-        textScore: rounded(candidate.textScore),
-        imageScore: rounded(candidate.imageScore),
+        textScore: rounded(textScore),
+        imageScore: rounded(imageScore),
         overallScore: rounded(overall),
-        matchType: both ? "图文相似" : candidate.imageScore >= candidate.textScore ? "图片相似" : "文字相似",
+        matchType: both ? "图文相似" : imageScore >= textScore ? "图片相似" : "文字相似",
         evidence: candidate.evidence,
       } satisfies CandidateMatch;
     })

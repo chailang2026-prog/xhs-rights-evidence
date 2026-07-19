@@ -3,6 +3,10 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 const allowedImageDomains = ["xhscdn.com", "xiaohongshu.com", "rednote.com"];
 const proxyLifetimeSeconds = 60 * 30;
 
+function allowedImageHost(host: string) {
+  return allowedImageDomains.some((domain) => host === domain || host.endsWith(`.${domain}`));
+}
+
 function signingSecret() {
   return process.env.APP_PASSWORD || "";
 }
@@ -21,9 +25,22 @@ export function isAllowedSourceImageUrl(value: string) {
   try {
     const url = new URL(value);
     const host = url.hostname.toLowerCase();
-    return url.protocol === "https:" && allowedImageDomains.some((domain) => host === domain || host.endsWith(`.${domain}`));
+    return url.protocol === "https:" && allowedImageHost(host);
   } catch {
     return false;
+  }
+}
+
+export function normalizeSourceImageUrl(value: string) {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase();
+    if ((url.protocol !== "http:" && url.protocol !== "https:") || !allowedImageHost(host)) return null;
+    if (host === "ci.xiaohongshu.com" && url.pathname === "/") return null;
+    url.protocol = "https:";
+    return isAllowedSourceImageUrl(url.toString()) ? url.toString() : null;
+  } catch {
+    return null;
   }
 }
 

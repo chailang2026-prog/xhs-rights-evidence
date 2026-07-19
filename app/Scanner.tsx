@@ -17,7 +17,7 @@ const scanSteps = [
   "正在读取笔记中的文字与图片…",
   "正在检索大众点评、携程等公开页面…",
   "正在用图片视觉匹配查找疑似盗图…",
-  "正在计算相似度并整理线索…",
+  "正在计算线索强度并整理结果…",
 ];
 
 function percent(value: number) {
@@ -35,7 +35,7 @@ function csvCell(value: unknown) {
 function Score({ label, value, tone }: { label: string; value: number; tone: "red" | "amber" }) {
   if (!value) return null;
   return (
-    <span className={`score score-${tone}`} title={`${label}相似度 ${percent(value)}`}>
+    <span className={`score score-${tone}`} title={`${label}线索强度 ${percent(value)}`}>
       <i style={{ "--score": `${Math.round(value * 100)}%` } as React.CSSProperties} />
       {label} {percent(value)}
     </span>
@@ -206,7 +206,7 @@ export default function Scanner() {
     .filter((scan) => scan.matches.length), [filter, scans]);
 
   function exportCsv() {
-    const headers = ["原笔记", "目标平台", "疑似侵权链接", "匹配类型", "综合相似度", "文字相似度", "图片相似度", "复核状态", "证据说明", "发现时间"];
+    const headers = ["原笔记", "目标平台", "疑似侵权链接", "匹配类型", "综合线索强度", "文字匹配强度", "图片匹配强度", "复核状态", "证据说明", "发现时间"];
     const rows = allMatches.map(({ scan, match }) => [scan.sourceUrl, match.platformName, match.targetUrl, match.matchType, percent(match.overallScore), percent(match.textScore), percent(match.imageScore), match.reviewStatus, match.evidence.join("；"), match.discoveredAt]);
     const csv = `\uFEFF${[headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n")}`;
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
@@ -267,16 +267,16 @@ export default function Scanner() {
               <div>{targetPlatforms.map((platform) => <button key={platform.id} type="button" aria-pressed={selectedPlatforms.includes(platform.id)} className={selectedPlatforms.includes(platform.id) ? "selected" : ""} onClick={() => togglePlatform(platform.id)}>{platform.name}<i /></button>)}</div>
             </fieldset>
             <button className="scan-button" type="submit" disabled={scanning}>{scanning ? <><span className="button-spinner" />{scanSteps[scanStep]}</> : <>开始全网匹配 <span>→</span></>}</button>
-            <p className="scan-caption">每次会比对最多 4 张原图，并对正文关键句进行逐平台检索。</p>
+            <p className="scan-caption">每次会比对最多 4 张原图，并通过百度与 Google 对正文关键句进行逐平台检索。</p>
           </form>
         </section>
 
         <section className="how-it-works" aria-label="扫描流程">
           <div><b>01</b><span><strong>提取原笔记</strong><small>标题、正文与图片</small></span></div>
           <i>→</i>
-          <div><b>02</b><span><strong>搜索公开网页</strong><small>百度检索 + Google Lens</small></span></div>
+          <div><b>02</b><span><strong>搜索公开网页</strong><small>百度 + Google + Google Lens</small></span></div>
           <i>→</i>
-          <div><b>03</b><span><strong>相似度复核</strong><small>保留可点击的来源链接</small></span></div>
+          <div><b>03</b><span><strong>线索强度排序</strong><small>保留可点击的来源链接</small></span></div>
         </section>
 
         <section className="results-section">
@@ -323,7 +323,7 @@ export default function Scanner() {
 function MatchCard({ match, onChange }: { match: ScanMatch; onChange: (status: ReviewStatus) => void }) {
   return (
     <article className="match-card">
-      <div className="match-score"><strong>{percent(match.overallScore)}</strong><span>综合相似</span></div>
+      <div className="match-score"><strong>{percent(match.overallScore)}</strong><span>线索强度</span></div>
       <div className="match-body">
         <div className="match-meta"><span className={`platform platform-${match.platform}`}>{match.platformName}</span><span>{match.matchType}</span><time>{formatDate(match.discoveredAt)}</time></div>
         <h4>{match.title}</h4>

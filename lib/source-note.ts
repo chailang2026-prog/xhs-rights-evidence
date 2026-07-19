@@ -1,5 +1,5 @@
 import type { SourceNote } from "./types";
-import { isAllowedSourceImageUrl } from "./source-images.ts";
+import { normalizeSourceImageUrl } from "./source-images.ts";
 
 const sourceHosts = ["xiaohongshu.com", "xhslink.com", "xhs.cn", "rednote.com"];
 
@@ -73,6 +73,132 @@ function cleanText(value: string) {
   return value.replace(/\s+/g, " ").replace(/^[-–—\s]+|[-–—\s]+$/g, "").trim();
 }
 
+function cleanBodyText(value: string) {
+  return value
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map(cleanText)
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function extractObjectAfter(html: string, marker: string, fromIndex: number) {
+  const markerIndex = html.indexOf(marker, fromIndex);
+  if (markerIndex < 0) return null;
+  const start = html.indexOf("{", markerIndex + marker.length);
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < html.length; index += 1) {
+    const character = html[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') inString = true;
+    else if (character === "{") depth += 1;
+    else if (character === "}" && --depth === 0) {
+      try {
+        return recordValue(JSON.parse(html.slice(start, index + 1)));
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+function noteIdFromUrl(url: URL) {
+  return url.pathname.match(/\/(?:explore|discovery\/item)\/([a-f0-9]+)/i)?.[1] || null;
+}
+
+function unavailablePageCopy(value: string) {
+  return /页面不见了|笔记(?:已删除|不存在)|内容(?:已删除|不存在|无法展示)|仅作者可见|登录后查看/i.test(cleanText(value));
+}
+
+function meaningfulTitleCopy(value: string) {
+  const title = cleanText(value);
+  return title.length >= 4
+    && !unavailablePageCopy(title)
+    && !/^(?:小红书|小红书\s*[-–—]\s*(?:你的生活指南|发现真实.*))$/i.test(title);
+}
+
+function currentNoteData(html: string, finalUrl: URL) {
+  const rootIndex = html.indexOf('"noteData":{"routeQuery"');
+  if (rootIndex < 0) return null;
+  const note = extractObjectAfter(html, '"data":{"noteData":', rootIndex);
+  const expectedNoteId = noteIdFromUrl(finalUrl);
+  if (!note || (expectedNoteId && stringValue(note.noteId) !== expectedNoteId)) return null;
+  return note;
+}
+
+function noteImageUrls(note: Record<string, unknown> | null) {
+  if (!note || !Array.isArray(note.imageList)) return [];
+  const urls: string[] = [];
+  for (const value of note.imageList) {
+    const image = recordValue(value);
+    if (!image) continue;
+    const variants: string[] = [];
+    for (const key of ["url", "urlDefault", "urlPre"]) {
+      if (typeof image[key] === "string") variants.push(image[key] as string);
+    }
+    if (Array.isArray(image.infoList)) {
+      for (const infoValue of image.infoList) {
+        const info = recordValue(infoValue);
+        if (typeof info?.url === "string") variants.push(info.url);
+      }
+    }
+    const usable = variants.find((candidate) => normalizeSourceImageUrl(candidate));
+    if (usable) urls.push(usable);
+  }
+  return urls;
+}
+
+function noteAuthor(note: Record<string, unknown> | null) {
+  const user = recordValue(note?.user);
+  const value = stringValue(user?.nickName || user?.nickname || user?.name);
+  return value && value.toLowerCase() !== "undefined" ? value : "";
+}
+
+async function fetchNotePage(initialUrl: URL, signal: AbortSignal) {
+  let currentUrl = initialUrl;
+  for (let redirectCount = 0; redirectCount <= 5; redirectCount += 1) {
+    const response = await fetch(currentUrl.toString(), {
+      redirect: "manual",
+      signal,
+      headers: {
+        "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 Version/17.5 Mobile/15E148 Safari/604.1",
+        accept: "text/html,application/xhtml+xml",
+        "accept-language": "zh-CN,zh;q=0.9",
+      },
+    });
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get("location");
+      if (!location) throw new Error("小红书短链接返回了无效跳转。");
+      const nextUrl = new URL(location, currentUrl);
+      if (nextUrl.protocol !== "https:" || !allowedSourceHost(nextUrl.hostname)) {
+        throw new Error("小红书链接跳转到了不受信任的地址，已停止处理。");
+      }
+      currentUrl = nextUrl;
+      continue;
+    }
+    const reportedUrl = response.url ? new URL(response.url) : currentUrl;
+    if (reportedUrl.protocol !== "https:" || !allowedSourceHost(reportedUrl.hostname)) {
+      throw new Error("小红书链接返回了不受信任的地址，已停止处理。");
+    }
+    return { response, finalUrl: reportedUrl };
+  }
+  throw new Error("小红书链接跳转次数过多，已停止处理。");
+}
+
 export async function extractSourceNote(inputUrl: string): Promise<SourceNote> {
   let parsed: URL;
   try {
@@ -80,53 +206,52 @@ export async function extractSourceNote(inputUrl: string): Promise<SourceNote> {
   } catch {
     throw new Error("请粘贴有效的小红书笔记链接。");
   }
+  if (parsed.protocol === "http:") parsed.protocol = "https:";
+  if (parsed.protocol !== "https:") throw new Error("小红书笔记链接必须使用 HTTPS。");
   if (!allowedSourceHost(parsed.hostname)) throw new Error("目前只支持小红书、xhslink 或 RedNote 的公开笔记链接。");
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15000);
   let response: Response;
+  let finalUrl: URL;
   try {
-    response = await fetch(parsed.toString(), {
-      redirect: "follow",
-      signal: controller.signal,
-      headers: {
-        "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 Version/17.5 Mobile/15E148 Safari/604.1",
-        accept: "text/html,application/xhtml+xml",
-        "accept-language": "zh-CN,zh;q=0.9",
-      },
-    });
+    ({ response, finalUrl } = await fetchNotePage(parsed, controller.signal));
   } finally {
     clearTimeout(timer);
   }
   if (!response.ok) throw new Error(`小红书页面读取失败（${response.status}），请确认链接可以公开访问。`);
-  const finalUrl = new URL(response.url);
-  if (!allowedSourceHost(finalUrl.hostname)) throw new Error("短链接跳转到了非小红书页面，已停止处理。");
   const contentLength = Number(response.headers.get("content-length") || 0);
   if (contentLength > 6_000_000) throw new Error("笔记页面内容过大，无法安全读取。");
   const html = await response.text();
+  if (html.length > 6_000_000) throw new Error("笔记页面内容过大，无法安全读取。");
 
   const jsonLd = collectJsonLd(html);
+  const currentNote = currentNoteData(html, finalUrl);
   const noteStateIndex = html.indexOf('"noteDetailMap"');
-  const noteState = noteStateIndex >= 0 ? html.slice(noteStateIndex, noteStateIndex + 1_500_000) : "";
+  const rawNoteState = noteStateIndex >= 0 ? html.slice(noteStateIndex, noteStateIndex + 1_500_000) : "";
+  const expectedNoteId = noteIdFromUrl(finalUrl);
+  const noteState = rawNoteState && (!expectedNoteId || rawNoteState.includes(expectedNoteId)) ? rawNoteState : "";
   const titleCandidates = [
+    stringValue(currentNote?.title),
     ...readMeta(html, ["og:title", "twitter:title"]),
     ...jsonLd.map((item) => stringValue(item.headline || item.name)),
   ];
   const descriptionCandidates = [
+    stringValue(currentNote?.desc || currentNote?.description),
     ...readMeta(html, ["og:description", "description", "twitter:description"]),
     ...jsonLd.map((item) => stringValue(item.description || item.articleBody)),
   ];
-  const authorCandidates = jsonLd.map((item) => {
+  const authorCandidates = [noteAuthor(currentNote), ...jsonLd.map((item) => {
     const author = item.author;
     return typeof author === "object" && author ? stringValue((author as Record<string, unknown>).name) : stringValue(author);
-  });
+  })];
 
   const stateTitle = noteState.match(/"title"\s*:\s*"((?:\\.|[^"\\])*)"/)?.[1];
   const stateDescription = noteState.match(/"desc"\s*:\s*"((?:\\.|[^"\\])*)"/)?.[1];
   if (stateTitle) titleCandidates.push(parseJsonString(stateTitle));
   if (stateDescription) descriptionCandidates.push(parseJsonString(stateDescription));
 
-  const imageCandidates = [...readMeta(html, ["og:image", "twitter:image"] )];
+  const imageCandidates = [...noteImageUrls(currentNote), ...readMeta(html, ["og:image", "twitter:image"] )];
   for (const item of jsonLd) {
     const image = item.image;
     if (typeof image === "string") imageCandidates.push(image);
@@ -137,10 +262,15 @@ export async function extractSourceNote(inputUrl: string): Promise<SourceNote> {
     if (/^https?:\/\//i.test(value) && /xhscdn|xiaohongshu|sns-webpic/i.test(value)) imageCandidates.push(value);
   }
 
-  const title = cleanText(titleCandidates.find((value) => cleanText(value).length >= 4) || "小红书笔记").slice(0, 180);
-  const text = cleanText(descriptionCandidates.find((value) => cleanText(value).length >= 12) || title).slice(0, 12000);
-  const imageUrls = [...new Set(imageCandidates.map(decodeEntities).filter(isAllowedSourceImageUrl))].slice(0, 9);
-  if (!noteState && jsonLd.length === 0 && readMeta(html, ["og:title", "og:description", "og:image"]).length === 0) {
+  if (!currentNote && !noteState && titleCandidates.some(unavailablePageCopy)) {
+    throw new Error("这条笔记已删除、不可见或链接已经失效。");
+  }
+  const selectedTitle = titleCandidates.find(meaningfulTitleCopy) || "";
+  const selectedDescription = descriptionCandidates.find((value) => cleanBodyText(value).length >= 12) || "";
+  const title = cleanText(selectedTitle || "小红书笔记").slice(0, 180);
+  const text = cleanBodyText(selectedDescription || title).slice(0, 12000);
+  const imageUrls = [...new Set(imageCandidates.map(decodeEntities).map(normalizeSourceImageUrl).filter((value): value is string => Boolean(value)))].slice(0, 9);
+  if (!currentNote && !noteState && !selectedTitle && !selectedDescription && imageUrls.length === 0) {
     throw new Error("这条笔记当前没有返回公开图文内容，可能已删除、仅登录可见或链接已失效。");
   }
   if (text.length < 8 && imageUrls.length === 0) {
@@ -152,6 +282,6 @@ export async function extractSourceNote(inputUrl: string): Promise<SourceNote> {
     title,
     text,
     imageUrls,
-    author: authorCandidates.find((value) => value.trim())?.trim().slice(0, 100) || null,
+    author: authorCandidates.find((value) => value.trim() && value.trim().toLowerCase() !== "undefined")?.trim().slice(0, 100) || null,
   };
 }

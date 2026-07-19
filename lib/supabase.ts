@@ -147,6 +147,20 @@ export async function markScanRunning(id: string) {
   if (error) throw error;
 }
 
+export async function refreshScanSource(id: string, source: SourceNote) {
+  const { error } = await database()
+    .from("note_scans")
+    .update({
+      source_url: source.url,
+      source_title: source.title,
+      source_text: source.text,
+      source_images: source.imageUrls,
+      source_author: source.author,
+    })
+    .eq("id", id);
+  if (error) throw error;
+}
+
 export async function replaceMatches(scanId: string, matches: CandidateMatch[]) {
   const db = database();
   const { data: previous, error: previousError } = await db

@@ -3,7 +3,7 @@ import test from "node:test";
 import { extractSourceNote } from "../lib/source-note.ts";
 import { createSessionToken, isSessionValid, sessionCookie, verifyPassword } from "../lib/auth.ts";
 import { extractSearchPhrases, textSimilarity } from "../lib/matching.ts";
-import { createSourceImageProxyUrl, isAllowedSourceImageUrl, verifySourceImageProxyUrl } from "../lib/source-images.ts";
+import { createSourceImageProxyUrl, isAllowedSourceImageUrl, normalizeSourceImageUrl, verifySourceImageProxyUrl } from "../lib/source-images.ts";
 import { GET as getSourceImage } from "../app/api/source-image/route.ts";
 import { scanPublicWeb } from "../lib/scanner.ts";
 import { publicRequestOrigin } from "../lib/request-origin.ts";
@@ -34,6 +34,28 @@ test("extracts public note metadata without pulling unrelated page content", asy
   assert.doesNotMatch(note.title, /不相关热榜/);
 });
 
+test("extracts the current Xiaohongshu initial-state note object and one URL per original image", async () => {
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    url: "https://www.xiaohongshu.com/discovery/item/abc123",
+    headers: new Headers({ "content-length": "1800" }),
+    text: async () => `<!doctype html><html><head>
+      <meta property="og:title" content=" - 小红书">
+      <meta property="og:image" content="https://ci.xiaohongshu.com/?imageMogr2/format/jpg">
+    </head><body><script>window.__INITIAL_STATE__={"noteData":{"routeQuery":{},"data":{"noteData":{"noteId":"abc123","title":"厦门老街散步路线","desc":"从八市沿着开元路慢慢走，傍晚会经过几家很安静的老店。","user":{"nickName":"原创作者"},"imageList":[{"url":"http://sns-webpic-qc.xhscdn.com/note/first.jpg","infoList":[{"url":"http://sns-webpic-qc.xhscdn.com/note/first-preview.jpg"}]},{"infoList":[{"url":"https://sns-webpic-qc.xhscdn.com/note/second.jpg"}]}]},"commentData":{}}}};</script></body></html>`,
+  });
+
+  const note = await extractSourceNote("https://www.xiaohongshu.com/explore/abc123");
+  assert.equal(note.title, "厦门老街散步路线");
+  assert.match(note.text, /八市沿着开元路/);
+  assert.equal(note.author, "原创作者");
+  assert.deepEqual(note.imageUrls, [
+    "https://sns-webpic-qc.xhscdn.com/note/first.jpg",
+    "https://sns-webpic-qc.xhscdn.com/note/second.jpg",
+  ]);
+});
+
 test("rejects an unavailable note page instead of using hot-list text", async () => {
   globalThis.fetch = async () => ({
     ok: true,
@@ -49,11 +71,44 @@ test("rejects an unavailable note page instead of using hot-list text", async ()
   );
 });
 
+test("rejects a real-style unavailable page even when it has Open Graph metadata", async () => {
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    url: "https://www.xiaohongshu.com/discovery/item/dead123",
+    headers: new Headers(),
+    text: async () => `<html><head>
+      <meta property="og:title" content="你访问的页面不见了 - 小红书">
+      <meta property="og:image" content="https://ci.xiaohongshu.com/?imageMogr2/format/jpg">
+    </head><body><script>window.__INITIAL_STATE__={"hotlistData":[{"title":"旅行热门内容"}]};</script></body></html>`,
+  });
+
+  await assert.rejects(
+    extractSourceNote("https://www.xiaohongshu.com/explore/dead123"),
+    /已删除、不可见|失效/,
+  );
+});
+
 test("rejects non-Xiaohongshu source links before fetching", async () => {
   let fetched = false;
   globalThis.fetch = async () => { fetched = true; throw new Error("should not fetch"); };
   await assert.rejects(extractSourceNote("https://example.com/post"), /只支持小红书/);
   assert.equal(fetched, false);
+});
+
+test("does not follow Xiaohongshu redirects to untrusted hosts", async () => {
+  let fetchCount = 0;
+  globalThis.fetch = async () => {
+    fetchCount += 1;
+    return {
+      ok: false,
+      status: 302,
+      url: "https://xhslink.com/example",
+      headers: new Headers({ location: "http://127.0.0.1/internal" }),
+    };
+  };
+  await assert.rejects(extractSourceNote("https://xhslink.com/example"), /不受信任/);
+  assert.equal(fetchCount, 1);
 });
 
 test("protects private scan APIs with a signed HttpOnly session", () => {
@@ -85,7 +140,7 @@ test("scores copied Chinese text above loosely related text", () => {
 test("builds distinctive search phrases and removes hashtags", () => {
   const phrases = extractSearchPhrases({
     title: "青岛海边散步路线",
-    text: "从小麦岛沿着海边木栈道一直走到日落。#青岛旅行 傍晚六点可以看到整片橘色晚霞。",
+    text: "从小麦岛沿着海边木栈道一直走到日落。\n#青岛旅行 傍晚六点可以看到整片橘色晚霞。",
   });
   assert.ok(phrases.length >= 2);
   assert.ok(phrases.every((phrase) => !phrase.includes("#")));
@@ -108,6 +163,8 @@ test("signs short-lived image proxy URLs and rejects tampering or SSRF targets",
     assert.equal(verifySourceImageProxyUrl(proxy, now + 31 * 60_000), null);
     assert.equal(isAllowedSourceImageUrl("http://127.0.0.1/admin.png"), false);
     assert.equal(isAllowedSourceImageUrl("https://evil-xhscdn.com/photo.png"), false);
+    assert.equal(normalizeSourceImageUrl("http://sns-webpic-qc.xhscdn.com/photo.png"), "https://sns-webpic-qc.xhscdn.com/photo.png");
+    assert.equal(normalizeSourceImageUrl("https://ci.xiaohongshu.com/?imageMogr2/format/jpg"), null);
   } finally {
     if (previousPassword === undefined) delete process.env.APP_PASSWORD;
     else process.env.APP_PASSWORD = previousPassword;
@@ -162,26 +219,36 @@ test("combines copied text and Lens image evidence into one reviewable link", as
   process.env.SERPAPI_API_KEY = "test-serp-key";
   process.env.SCAN_MAX_TEXT_SEARCHES = "6";
   try {
+    const engines = new Set();
     globalThis.fetch = async (value) => {
       const url = new URL(String(value));
       assert.equal(url.hostname, "serpapi.com");
       const engine = url.searchParams.get("engine");
+      engines.add(engine);
       if (engine === "google_lens") {
         assert.match(url.searchParams.get("url") || "", /^https:\/\/radar\.example\/api\/source-image/);
         return Response.json({
           visual_matches: [{
+            position: 1,
             title: "青岛小麦岛沿海路线",
             link: "https://www.dianping.com/shop/123/review/456?utm_source=test",
             thumbnail: "https://images.example/match.webp",
+            exact_matches: true,
           }],
         });
       }
-      if (engine === "baidu") {
+      if (engine === "baidu" || engine === "google") {
         return Response.json({
           organic_results: [{
+            position: 1,
             title: "青岛海边散步路线",
             link: "https://www.dianping.com/shop/123/review/456",
             snippet: "从小麦岛沿着海边木栈道一直走到日落，傍晚六点可以看到整片橘色晚霞。",
+          }, {
+            position: 2,
+            title: "不安全链接",
+            link: "javascript:alert(1)",
+            snippet: "从小麦岛沿着海边木栈道一直走到日落。",
           }],
         });
       }
@@ -201,11 +268,12 @@ test("combines copied text and Lens image evidence into one reviewable link", as
     assert.equal(result.matches[0].platform, "dianping");
     assert.equal(result.matches[0].matchType, "图文相似");
     assert.ok(result.matches[0].textScore > 0.9);
-    assert.equal(result.matches[0].imageScore, 0.84);
-    assert.equal(result.matches[0].evidence.length, 3);
-    assert.ok(result.matches[0].evidence.some((item) => item.startsWith("文字命中")));
-    assert.ok(result.matches[0].evidence.some((item) => item.startsWith("图片视觉匹配")));
+    assert.equal(result.matches[0].imageScore, 0.98);
+    assert.ok(result.matches[0].evidence.some((item) => item.startsWith("百度文字命中")));
+    assert.ok(result.matches[0].evidence.some((item) => item.startsWith("Google文字命中")));
+    assert.ok(result.matches[0].evidence.some((item) => item.startsWith("Google Lens 精确图片命中")));
     assert.doesNotMatch(result.matches[0].targetUrl, /utm_source/);
+    assert.deepEqual([...engines].sort(), ["baidu", "google", "google_lens"]);
   } finally {
     if (previousPassword === undefined) delete process.env.APP_PASSWORD;
     else process.env.APP_PASSWORD = previousPassword;
@@ -215,6 +283,101 @@ test("combines copied text and Lens image evidence into one reviewable link", as
     else process.env.SERPAPI_API_KEY = previousSerpKey;
     if (previousLimit === undefined) delete process.env.SCAN_MAX_TEXT_SEARCHES;
     else process.env.SCAN_MAX_TEXT_SEARCHES = previousLimit;
+  }
+});
+
+test("covers every named travel platform across Baidu and Google results", async () => {
+  const previousSerpKey = process.env.SERPAPI_API_KEY;
+  const previousLimit = process.env.SCAN_MAX_TEXT_SEARCHES;
+  process.env.SERPAPI_API_KEY = "test-serp-key";
+  process.env.SCAN_MAX_TEXT_SEARCHES = "12";
+  try {
+    const organicResults = [
+      ["https://www.dianping.com/shop/1/review/1", "大众点评"],
+      ["https://you.ctrip.com/travels/xiamen21/1.html", "携程"],
+      ["https://travel.qunar.com/p-pl1", "去哪儿"],
+      ["https://travel.taobao.com/item/1", "飞猪"],
+      ["https://www.amap.com/place/B1", "高德地图"],
+      ["https://travel.example.com/post/1", "其他网页"],
+    ].map(([link, title], index) => ({
+      position: index + 1,
+      title: `${title}厦门老街路线`,
+      link,
+      snippet: "从八市沿着开元路慢慢走，傍晚会经过几家很安静的老店。",
+    }));
+    const engines = new Set();
+    globalThis.fetch = async (value) => {
+      const engine = new URL(String(value)).searchParams.get("engine");
+      engines.add(engine);
+      assert.ok(engine === "baidu" || engine === "google");
+      return Response.json({ organic_results: organicResults });
+    };
+
+    const result = await scanPublicWeb({
+      url: "https://www.xiaohongshu.com/explore/source-note",
+      title: "厦门老街散步路线",
+      text: "从八市沿着开元路慢慢走，傍晚会经过几家很安静的老店。",
+      imageUrls: [],
+      author: "原创作者",
+    }, ["dianping", "ctrip", "qunar", "fliggy", "amap", "web"]);
+
+    assert.equal(result.partial, false);
+    assert.deepEqual(result.matches.map((match) => match.platform).sort(), ["amap", "ctrip", "dianping", "fliggy", "qunar", "web"]);
+    assert.deepEqual([...engines].sort(), ["baidu", "google"]);
+    assert.ok(result.matches.every((match) => match.textScore >= 0.9));
+  } finally {
+    if (previousSerpKey === undefined) delete process.env.SERPAPI_API_KEY;
+    else process.env.SERPAPI_API_KEY = previousSerpKey;
+    if (previousLimit === undefined) delete process.env.SCAN_MAX_TEXT_SEARCHES;
+    else process.env.SCAN_MAX_TEXT_SEARCHES = previousLimit;
+  }
+});
+
+test("raises image lead strength when multiple original images point to the same page", async () => {
+  const previousPassword = process.env.APP_PASSWORD;
+  const previousSiteUrl = process.env.NEXT_PUBLIC_SITE_URL;
+  const previousSerpKey = process.env.SERPAPI_API_KEY;
+  process.env.APP_PASSWORD = "a-strong-private-password";
+  process.env.NEXT_PUBLIC_SITE_URL = "https://radar.example";
+  process.env.SERPAPI_API_KEY = "test-serp-key";
+  try {
+    let imageSearches = 0;
+    globalThis.fetch = async (value) => {
+      const engine = new URL(String(value)).searchParams.get("engine");
+      assert.equal(engine, "google_lens");
+      imageSearches += 1;
+      return Response.json({
+        visual_matches: [{
+          position: imageSearches === 1 ? 2 : 8,
+          title: "同一篇旅行攻略",
+          link: "https://travel.example.com/copied-post",
+        }],
+      });
+    };
+
+    const result = await scanPublicWeb({
+      url: "https://www.xiaohongshu.com/explore/source-note",
+      title: "短标题",
+      text: "短正文",
+      imageUrls: [
+        "https://sns-webpic-qc.xhscdn.com/notes/one.webp",
+        "https://sns-webpic-qc.xhscdn.com/notes/two.webp",
+      ],
+      author: null,
+    }, ["web"], "https://radar.example");
+
+    assert.equal(imageSearches, 2);
+    assert.equal(result.matches.length, 1);
+    assert.equal(result.matches[0].matchType, "图片相似");
+    assert.equal(result.matches[0].imageScore, 0.91);
+    assert.equal(result.matches[0].evidence.length, 2);
+  } finally {
+    if (previousPassword === undefined) delete process.env.APP_PASSWORD;
+    else process.env.APP_PASSWORD = previousPassword;
+    if (previousSiteUrl === undefined) delete process.env.NEXT_PUBLIC_SITE_URL;
+    else process.env.NEXT_PUBLIC_SITE_URL = previousSiteUrl;
+    if (previousSerpKey === undefined) delete process.env.SERPAPI_API_KEY;
+    else process.env.SERPAPI_API_KEY = previousSerpKey;
   }
 });
 
