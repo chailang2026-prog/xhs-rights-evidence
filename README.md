@@ -1,98 +1,58 @@
-# vinext-starter
+# 原创雷达
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+面向小红书创作者的图文侵权线索发现工具。粘贴一条公开的小红书笔记链接后，系统会：
 
-## Prerequisites
+1. 提取笔记标题、正文和图片地址；
+2. 用百度公开索引搜索正文关键句；
+3. 用 Google Lens 搜索相似图片；
+4. 重点标记大众点评、携程、去哪儿、飞猪和高德地图，同时保留其他公开网页候选；
+5. 对文字和图片线索评分，交给用户人工确认、排除或继续处理。
 
-- Node.js `>=22.13.0`
+> 结果是“疑似侵权线索”，不是法律结论。系统不会绕过平台登录、验证码或反爬机制，因此无法覆盖仅 App 内可见、未被搜索引擎收录或限制公开访问的内容。
 
-## Quick Start
+## 部署环境
+
+- Node.js 20.9 或更高版本
+- Supabase 数据库
+- SerpApi 账号（文字搜索和 Google Lens 图片匹配）
+
+复制 `.env.example` 为 `.env.local` 并配置：
+
+```bash
+APP_PASSWORD=至少8位的访问密码
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=服务端专用密钥
+SERPAPI_API_KEY=SerpApi密钥
+NEXT_PUBLIC_SITE_URL=https://你的正式域名
+```
+
+`SUPABASE_SERVICE_ROLE_KEY` 与 `SERPAPI_API_KEY` 只能配置在服务端环境变量中，禁止写进浏览器代码或提交到 GitHub。
+
+在 Supabase SQL Editor 中执行 `supabase/migrations/001_original_radar.sql`，然后：
 
 ```bash
 npm install
 npm run dev
-npm run build
+npm test
 ```
 
-This starter does not use `wrangler.jsonc`.
+## 扣子云部署
 
-## Included Shape
+1. 从本 GitHub 仓库导入 Web 项目；
+2. 创建 Supabase 数据库并执行迁移文件；
+3. 设置上述五个环境变量；
+4. 使用 `npm run build` 构建，使用 `npm start` 启动；
+5. 在正式环境用一条可公开访问的小红书图文笔记完成端到端扫描。
 
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
+## 当前匹配范围
 
-## Workspace Auth Headers
+| 平台 | 域名 |
+| --- | --- |
+| 大众点评 | `dianping.com` |
+| 携程 | `ctrip.com`, `trip.com` |
+| 去哪儿 | `qunar.com` |
+| 飞猪 | `fliggy.com`, `alitrip.com` |
+| 高德地图 | `amap.com`, `gaode.com` |
+| 其他公开网页 | 除小红书和搜索引擎本身之外的公开域名 |
 
-OpenAI workspace sites can read the current user's email from
-`oai-authenticated-user-email`.
-
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
-
-Treat the full name as optional and fall back to email when it is absent:
-
-```tsx
-import { headers } from "next/headers";
-
-export default async function Home() {
-  const requestHeaders = await headers();
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
-
-  const displayName = fullName ?? email;
-  // ...
-}
-```
-
-## Optional Dispatch-Owned ChatGPT Sign-In
-
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
-
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
-
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
-
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
-
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
-
-## Useful Commands
-
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
-
-## Learn More
-
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+文字检索每个平台使用一个精确关键句查询；图片检索最多处理原笔记前四张图片。匹配结果按综合相似度排序并可导出 CSV。

@@ -2,33 +2,47 @@ import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
-const templateRoot = new URL("../", import.meta.url);
-
-test("contains the complete infringement-tracking workflow", async () => {
-  const tracker = await readFile(new URL("../app/Tracker.tsx", import.meta.url), "utf8");
-  assert.match(tracker, /侵权取证夹/);
-  assert.match(tracker, /收好证据/);
-  assert.match(tracker, /我的侵权记录/);
-  assert.match(tracker, /添加侵权链接/);
-  assert.match(tracker, /\/api\/records/);
-  assert.match(tracker, /exportCsv/);
-  assert.doesNotMatch(tracker, /codex-preview|react-loading-skeleton/);
-});
-
-test("replaces starter metadata and disposable preview", async () => {
-  const [css, page, layout, packageJson] = await Promise.all([
-    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
-    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../package.json", import.meta.url), "utf8"),
+test("implements the source-note scanning workflow", async () => {
+  const [scanner, route, search, source] = await Promise.all([
+    readFile(new URL("../app/Scanner.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/scans/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/scanner.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/source-note.ts", import.meta.url), "utf8"),
   ]);
 
-  assert.match(css, /--red:\s*#ff2442/);
-  assert.match(css, /prefers-reduced-motion:\s*reduce/);
-  assert.match(page, /<Tracker \/>/);
-  assert.match(layout, /侵权取证夹/);
-  assert.match(layout, /lang="zh-CN"/);
-  assert.doesNotMatch(layout, /Starter Project|codex-preview|_sites-preview/);
-  assert.doesNotMatch(packageJson, /react-loading-skeleton/);
-  await assert.rejects(access(new URL("public/_sites-preview", templateRoot)));
+  assert.match(scanner, /贴入一条笔记/);
+  assert.match(scanner, /大众点评/);
+  assert.match(scanner, /Google Lens/);
+  assert.match(scanner, /疑似侵权线索/);
+  assert.match(scanner, /导出 CSV/);
+  assert.match(route, /extractSourceNote/);
+  assert.match(route, /scanPublicWeb/);
+  assert.match(search, /engine: "baidu"/);
+  assert.match(search, /engine: "google_lens"/);
+  assert.match(source, /xhslink\.com/);
+  assert.doesNotMatch(scanner, /添加侵权链接|手工登记/);
+});
+
+test("keeps secrets server-side and protects the database", async () => {
+  const [auth, supabase, migration, envExample] = await Promise.all([
+    readFile(new URL("../lib/auth.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/supabase.ts", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/migrations/001_original_radar.sql", import.meta.url), "utf8"),
+    readFile(new URL("../.env.example", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(auth, /HttpOnly/);
+  assert.match(auth, /SameSite=Lax/);
+  assert.match(supabase, /SUPABASE_SERVICE_ROLE_KEY/);
+  assert.match(migration, /enable row level security/);
+  assert.match(envExample, /SERPAPI_API_KEY/);
+  assert.doesNotMatch(envExample, /sk-|eyJ[a-zA-Z0-9]/);
+});
+
+test("removes platform-specific D1 runtime files", async () => {
+  await assert.rejects(access(new URL("../.openai/hosting.json", import.meta.url)));
+  await assert.rejects(access(new URL("../db/records.ts", import.meta.url)));
+  const packageJson = await readFile(new URL("../package.json", import.meta.url), "utf8");
+  assert.match(packageJson, /"build": "next build"/);
+  assert.doesNotMatch(packageJson, /vinext|wrangler|cloudflare:workers/);
 });

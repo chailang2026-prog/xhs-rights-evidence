@@ -1,5 +1,4 @@
 import type { Metadata, Viewport } from "next";
-import { headers } from "next/headers";
 import "./globals.css";
 
 export const viewport: Viewport = {
@@ -8,31 +7,21 @@ export const viewport: Viewport = {
   themeColor: "#f7f3ed",
 };
 
-export async function generateMetadata(): Promise<Metadata> {
-  const requestHeaders = await headers();
-  const host = requestHeaders.get("x-forwarded-host") || requestHeaders.get("host") || "localhost:3000";
-  const protocol = requestHeaders.get("x-forwarded-proto") || (host.includes("localhost") ? "http" : "https");
-  const origin = `${protocol}://${host}`;
-  const description = "集中记录网络侵权链接、发现时间与处理进度的私人证据夹。";
+const description = "粘贴小红书原创笔记链接，自动在旅行出游与生活探店平台中寻找疑似文字搬运和图片盗用线索。";
 
-  return {
-    title: "侵权取证夹｜收好证据，再慢慢处理",
+export const metadata: Metadata = {
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"),
+  title: "原创雷达｜小红书笔记侵权匹配",
+  description,
+  openGraph: {
+    title: "原创雷达",
     description,
-    openGraph: {
-      title: "侵权取证夹",
-      description,
-      type: "website",
-      locale: "zh_CN",
-      images: [{ url: `${origin}/og.png`, width: 1200, height: 630, alt: "侵权取证夹" }],
-    },
-    twitter: {
-      card: "summary_large_image",
-      title: "侵权取证夹",
-      description,
-      images: [`${origin}/og.png`],
-    },
-  };
-}
+    type: "website",
+    locale: "zh_CN",
+    images: [{ url: "/og-radar.png", width: 1200, height: 630, alt: "原创雷达：贴入笔记，寻找搬运痕迹" }],
+  },
+  twitter: { card: "summary_large_image", title: "原创雷达", description, images: ["/og-radar.png"] },
+};
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (

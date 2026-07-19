@@ -1,5 +1,5 @@
-import Tracker from "./Tracker";
+import Scanner from "./Scanner";
 
 export default function Home() {
-  return <Tracker />;
+  return <Scanner />;
 }
