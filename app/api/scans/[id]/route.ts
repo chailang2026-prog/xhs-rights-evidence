@@ -1,6 +1,7 @@
 import { isSessionValid, unauthorized } from "../../../../lib/auth";
 import { scanPublicWeb } from "../../../../lib/scanner";
 import { deleteScan, finishScan, getScan, markScanRunning, replaceMatches } from "../../../../lib/supabase";
+import { publicRequestOrigin } from "../../../../lib/request-origin.ts";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -17,7 +18,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       text: scan.sourceText,
       imageUrls: scan.sourceImages,
       author: scan.sourceAuthor,
-    }, scan.selectedPlatforms);
+    }, scan.selectedPlatforms, publicRequestOrigin(request));
     await replaceMatches(id, result.matches);
     await finishScan(id, result.partial ? "部分完成" : "已完成", result.warnings.join("；") || null);
     return Response.json({ scan: await getScan(id) });

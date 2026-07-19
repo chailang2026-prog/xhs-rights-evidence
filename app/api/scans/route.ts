@@ -3,6 +3,7 @@ import { scanPublicWeb } from "../../../lib/scanner";
 import { extractSourceNote } from "../../../lib/source-note";
 import { createScan, finishScan, getScan, listScans, replaceMatches } from "../../../lib/supabase";
 import { platformIds, type PlatformId } from "../../../lib/types";
+import { publicRequestOrigin } from "../../../lib/request-origin.ts";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -33,7 +34,7 @@ export async function POST(request: Request) {
     const source = await extractSourceNote(body.noteUrl);
     const scan = await createScan(source, selectedPlatforms);
     scanId = scan.id;
-    const result = await scanPublicWeb(source, selectedPlatforms);
+    const result = await scanPublicWeb(source, selectedPlatforms, publicRequestOrigin(request));
     await replaceMatches(scan.id, result.matches);
     await finishScan(scan.id, result.partial ? "部分完成" : "已完成", result.warnings.join("；") || null);
     return Response.json({ scan: await getScan(scan.id) }, { status: 201 });
@@ -45,4 +46,3 @@ export async function POST(request: Request) {
     return Response.json({ error: message }, { status });
   }
 }
-

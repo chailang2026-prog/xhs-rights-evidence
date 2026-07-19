@@ -3,8 +3,9 @@ import {
   type CandidateMatch,
   type PlatformId,
   type SourceNote,
-} from "./types";
-import { extractSearchPhrases, textSimilarity } from "./matching";
+} from "./types.ts";
+import { extractSearchPhrases, textSimilarity } from "./matching.ts";
+import { createSourceImageProxyUrl } from "./source-images.ts";
 
 type SearchResult = {
   title?: string;
@@ -30,6 +31,18 @@ type RawCandidate = {
   textScore: number;
   imageScore: number;
   evidence: string[];
+};
+
+type CandidateBatch = {
+  candidates: RawCandidate[];
+  warnings: string[];
+  attemptedQueries: number;
+  successfulQueries: number;
+};
+
+type TextQuery = {
+  platform: (typeof targetPlatforms)[number];
+  phrase: string;
 };
 
 function apiKey() {
@@ -91,78 +104,117 @@ async function mapLimit<T, R>(items: T[], limit: number, task: (item: T, index: 
   return results;
 }
 
-async function textCandidates(note: SourceNote, selected: PlatformId[]) {
-  const phrases = extractSearchPhrases(note);
-  if (!phrases.length) return [] as RawCandidate[];
-  const platforms = targetPlatforms.filter((platform) => selected.includes(platform.id));
-  const batches = await mapLimit(platforms, 3, async (platform) => {
-    const domainClause = platform.domains.map((domain) => `site:${domain}`).join(" OR ");
-    const exactPhrase = phrases[0].replace(/"/g, "");
-    const data = await serpApi({ engine: "baidu", q: domainClause ? `(${domainClause}) \"${exactPhrase}\"` : `\"${exactPhrase}\"`, rn: "20" });
-    return (data.organic_results || [])
-      .map((result) => ({ result, resolvedPlatform: result.link ? platformForUrl(result.link) : null }))
-      .filter((item) => item.result.link && item.resolvedPlatform && selected.includes(item.resolvedPlatform.id) && (platform.id === "web" || item.resolvedPlatform.id === platform.id))
-      .map(({ result, resolvedPlatform }) => {
-        const candidateText = `${result.title || ""} ${result.snippet || ""}`;
-        const score = Math.max(...phrases.map((phrase) => textSimilarity(phrase, candidateText)), textSimilarity(note.title, candidateText));
-        return {
-          targetUrl: canonicalUrl(result.link as string),
-          platform: resolvedPlatform!.id,
-          platformName: resolvedPlatform!.name,
-          title: result.title || `${resolvedPlatform!.name}上的疑似相似内容`,
-          snippet: result.snippet || "搜索结果未提供摘要，请打开原链接复核。",
-          thumbnailUrl: result.thumbnail || null,
-          textScore: score,
-          imageScore: 0,
-          evidence: [`文字命中：${exactPhrase.slice(0, 28)}${exactPhrase.length > 28 ? "…" : ""}`],
-        } satisfies RawCandidate;
-      });
-  });
-  return batches.flat();
+function textSearchLimit() {
+  const configured = Number(process.env.SCAN_MAX_TEXT_SEARCHES || 12);
+  return Number.isFinite(configured) ? Math.max(6, Math.min(24, Math.round(configured))) : 12;
 }
 
-async function imageCandidates(note: SourceNote, selected: PlatformId[]) {
-  const images = note.imageUrls.slice(0, 4);
-  if (!images.length) return [] as RawCandidate[];
-  const batches = await mapLimit(images, 2, async (imageUrl, imageIndex) => {
-    const data = await serpApi({
-      engine: "google_lens",
-      url: imageUrl,
-      type: "visual_matches",
-      hl: "zh-CN",
-      country: "cn",
-      safe: "active",
-    });
-    return (data.visual_matches || [])
-      .map((result) => ({ result, platform: result.link ? platformForUrl(result.link) : null }))
-      .filter((item) => item.result.link && item.platform && selected.includes(item.platform.id))
-      .map(({ result, platform }) => ({
-        targetUrl: canonicalUrl(result.link as string),
-        platform: platform!.id,
-        platformName: platform!.name,
-        title: result.title || `${platform!.name}上的疑似盗图内容`,
-        snippet: `Google Lens 在公开网页中发现了与原笔记第 ${imageIndex + 1} 张图片相似的内容。`,
-        thumbnailUrl: result.thumbnail || result.image || null,
-        textScore: 0,
-        imageScore: 0.84,
-        evidence: [`图片视觉匹配：原笔记第 ${imageIndex + 1} 张图`],
-      } satisfies RawCandidate));
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function textCandidates(note: SourceNote, selected: PlatformId[]) {
+  const phrases = extractSearchPhrases(note);
+  if (!phrases.length) return { candidates: [], warnings: [], attemptedQueries: 0, successfulQueries: 0 } satisfies CandidateBatch;
+  const platforms = targetPlatforms.filter((platform) => selected.includes(platform.id));
+  const queries: TextQuery[] = phrases.slice(0, 2).flatMap((phrase) => platforms.map((platform) => ({ platform, phrase }))).slice(0, textSearchLimit());
+  const batches = await mapLimit(queries, 3, async ({ platform, phrase }) => {
+    const exactPhrase = phrase.replace(/"/g, "");
+    try {
+      const domainClause = platform.domains.map((domain) => `site:${domain}`).join(" OR ");
+      const data = await serpApi({ engine: "baidu", q: domainClause ? `(${domainClause}) \"${exactPhrase}\"` : `\"${exactPhrase}\"`, rn: "20" });
+      const candidates = (data.organic_results || [])
+        .map((result) => ({ result, resolvedPlatform: result.link ? platformForUrl(result.link) : null }))
+        .filter((item) => item.result.link && item.resolvedPlatform && selected.includes(item.resolvedPlatform.id) && (platform.id === "web" || item.resolvedPlatform.id === platform.id))
+        .map(({ result, resolvedPlatform }) => {
+          const candidateText = `${result.title || ""} ${result.snippet || ""}`;
+          const score = Math.max(...phrases.map((item) => textSimilarity(item, candidateText)), textSimilarity(note.title, candidateText));
+          return {
+            targetUrl: canonicalUrl(result.link as string),
+            platform: resolvedPlatform!.id,
+            platformName: resolvedPlatform!.name,
+            title: result.title || `${resolvedPlatform!.name}上的疑似相似内容`,
+            snippet: result.snippet || "搜索结果未提供摘要，请打开原链接复核。",
+            thumbnailUrl: result.thumbnail || null,
+            textScore: score,
+            imageScore: 0,
+            evidence: [`文字命中：${exactPhrase.slice(0, 28)}${exactPhrase.length > 28 ? "…" : ""}`],
+          } satisfies RawCandidate;
+        });
+      return { candidates, warnings: [], successful: true };
+    } catch (error) {
+      return { candidates: [] as RawCandidate[], warnings: [`${platform.name}文字检索失败：${errorMessage(error)}`], successful: false };
+    }
   });
-  return batches.flat();
+  return {
+    candidates: batches.flatMap((batch) => batch.candidates),
+    warnings: [...new Set(batches.flatMap((batch) => batch.warnings))],
+    attemptedQueries: batches.length,
+    successfulQueries: batches.filter((batch) => batch.successful).length,
+  } satisfies CandidateBatch;
+}
+
+async function imageCandidates(note: SourceNote, selected: PlatformId[], publicOrigin?: string) {
+  const images = note.imageUrls.slice(0, 4);
+  if (!images.length) return { candidates: [], warnings: [], attemptedQueries: 0, successfulQueries: 0 } satisfies CandidateBatch;
+  const batches = await mapLimit(images, 2, async (imageUrl, imageIndex) => {
+    try {
+      const data = await serpApi({
+        engine: "google_lens",
+        url: createSourceImageProxyUrl(imageUrl, { origin: publicOrigin }),
+        type: "visual_matches",
+        hl: "zh-CN",
+        country: "cn",
+        safe: "active",
+      });
+      const candidates = (data.visual_matches || [])
+        .map((result) => ({ result, platform: result.link ? platformForUrl(result.link) : null }))
+        .filter((item) => item.result.link && item.platform && selected.includes(item.platform.id))
+        .map(({ result, platform }) => ({
+          targetUrl: canonicalUrl(result.link as string),
+          platform: platform!.id,
+          platformName: platform!.name,
+          title: result.title || `${platform!.name}上的疑似盗图内容`,
+          snippet: `Google Lens 在公开网页中发现了与原笔记第 ${imageIndex + 1} 张图片相似的内容。`,
+          thumbnailUrl: result.thumbnail || result.image || null,
+          textScore: 0,
+          imageScore: 0.84,
+          evidence: [`图片视觉匹配：原笔记第 ${imageIndex + 1} 张图`],
+        } satisfies RawCandidate));
+      return { candidates, warnings: [], successful: true };
+    } catch (error) {
+      return { candidates: [] as RawCandidate[], warnings: [`第 ${imageIndex + 1} 张图片检索失败：${errorMessage(error)}`], successful: false };
+    }
+  });
+  return {
+    candidates: batches.flatMap((batch) => batch.candidates),
+    warnings: [...new Set(batches.flatMap((batch) => batch.warnings))],
+    attemptedQueries: batches.length,
+    successfulQueries: batches.filter((batch) => batch.successful).length,
+  } satisfies CandidateBatch;
 }
 
 function rounded(value: number) {
   return Math.round(Math.max(0, Math.min(0.99, value)) * 100) / 100;
 }
 
-export async function scanPublicWeb(note: SourceNote, selectedPlatforms: PlatformId[]) {
+export async function scanPublicWeb(note: SourceNote, selectedPlatforms: PlatformId[], publicOrigin?: string) {
   const settled = await Promise.allSettled([
     textCandidates(note, selectedPlatforms),
-    imageCandidates(note, selectedPlatforms),
+    imageCandidates(note, selectedPlatforms, publicOrigin),
   ]);
   const failures = settled.filter((result): result is PromiseRejectedResult => result.status === "rejected");
-  const raw = settled.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
-  if (failures.length === settled.length) throw failures[0].reason;
+  const completed = settled.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
+  const raw = completed.flatMap((batch) => batch.candidates);
+  const warnings = [...new Set([
+    ...completed.flatMap((batch) => batch.warnings),
+    ...failures.map((failure) => errorMessage(failure.reason)),
+  ])];
+  const attemptedQueries = completed.reduce((total, batch) => total + batch.attemptedQueries, 0);
+  const successfulQueries = completed.reduce((total, batch) => total + batch.successfulQueries, 0);
+  if (failures.length === settled.length || (attemptedQueries > 0 && successfulQueries === 0)) {
+    throw new Error(warnings[0] || "所有检索请求均失败，请检查检索服务配置。");
+  }
 
   const merged = new Map<string, RawCandidate>();
   for (const candidate of raw) {
@@ -202,5 +254,5 @@ export async function scanPublicWeb(note: SourceNote, selectedPlatforms: Platfor
     .sort((a, b) => b.overallScore - a.overallScore)
     .slice(0, 80);
 
-  return { matches, partial: failures.length > 0, warnings: failures.map((failure) => failure.reason instanceof Error ? failure.reason.message : String(failure.reason)) };
+  return { matches, partial: warnings.length > 0, warnings };
 }

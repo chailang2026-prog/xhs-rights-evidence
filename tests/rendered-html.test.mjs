@@ -3,9 +3,10 @@ import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("implements the source-note scanning workflow", async () => {
-  const [scanner, route, search, source] = await Promise.all([
+  const [scanner, route, imageRoute, search, source] = await Promise.all([
     readFile(new URL("../app/Scanner.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/scans/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/source-image/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/scanner.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/source-note.ts", import.meta.url), "utf8"),
   ]);
@@ -19,6 +20,9 @@ test("implements the source-note scanning workflow", async () => {
   assert.match(route, /scanPublicWeb/);
   assert.match(search, /engine: "baidu"/);
   assert.match(search, /engine: "google_lens"/);
+  assert.match(search, /createSourceImageProxyUrl/);
+  assert.match(imageRoute, /verifySourceImageProxyUrl/);
+  assert.match(imageRoute, /12_000_000/);
   assert.match(source, /xhslink\.com/);
   assert.doesNotMatch(scanner, /添加侵权链接|手工登记/);
 });

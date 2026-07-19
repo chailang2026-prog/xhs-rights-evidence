@@ -24,9 +24,12 @@ SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=服务端专用密钥
 SERPAPI_API_KEY=SerpApi密钥
 NEXT_PUBLIC_SITE_URL=https://你的正式域名
+SCAN_MAX_TEXT_SEARCHES=12
 ```
 
-`SUPABASE_SERVICE_ROLE_KEY` 与 `SERPAPI_API_KEY` 只能配置在服务端环境变量中，禁止写进浏览器代码或提交到 GitHub。
+`SUPABASE_SERVICE_ROLE_KEY` 与 `SERPAPI_API_KEY` 只能配置在服务端环境变量中，禁止写进浏览器代码或提交到 GitHub。`SCAN_MAX_TEXT_SEARCHES` 可选，默认每条笔记最多执行 12 次文字检索。
+
+图片检索不会直接把可能失效的小红书 CDN 地址交给 Google Lens。应用会生成一个 30 分钟有效、带 HMAC 签名的只读图片代理地址；代理仅允许小红书图片域名、限定图片格式与 12MB 大小，并拒绝任意外部 URL，避免 SSRF。
 
 在 Supabase SQL Editor 中执行 `supabase/migrations/001_original_radar.sql`，然后：
 
@@ -55,4 +58,4 @@ npm test
 | 高德地图 | `amap.com`, `gaode.com` |
 | 其他公开网页 | 除小红书和搜索引擎本身之外的公开域名 |
 
-文字检索每个平台使用一个精确关键句查询；图片检索最多处理原笔记前四张图片。匹配结果按综合相似度排序并可导出 CSV。
+文字检索从正文选取最多两个有区分度的关键句，按查询预算逐平台检索；图片检索最多处理原笔记前四张图片。单个查询失败不会丢弃其他已成功的结果，匹配结果按综合相似度排序并可导出 CSV。

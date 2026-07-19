@@ -1,4 +1,5 @@
 import type { SourceNote } from "./types";
+import { isAllowedSourceImageUrl } from "./source-images.ts";
 
 const sourceHosts = ["xiaohongshu.com", "xhslink.com", "xhs.cn", "rednote.com"];
 
@@ -138,7 +139,7 @@ export async function extractSourceNote(inputUrl: string): Promise<SourceNote> {
 
   const title = cleanText(titleCandidates.find((value) => cleanText(value).length >= 4) || "小红书笔记").slice(0, 180);
   const text = cleanText(descriptionCandidates.find((value) => cleanText(value).length >= 12) || title).slice(0, 12000);
-  const imageUrls = [...new Set(imageCandidates.map(decodeEntities).filter((value) => /^https?:\/\//i.test(value)))].slice(0, 9);
+  const imageUrls = [...new Set(imageCandidates.map(decodeEntities).filter(isAllowedSourceImageUrl))].slice(0, 9);
   if (!noteState && jsonLd.length === 0 && readMeta(html, ["og:title", "og:description", "og:image"]).length === 0) {
     throw new Error("这条笔记当前没有返回公开图文内容，可能已删除、仅登录可见或链接已失效。");
   }
