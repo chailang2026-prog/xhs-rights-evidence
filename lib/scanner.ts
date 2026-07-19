@@ -14,13 +14,16 @@ type SearchResult = {
   snippet?: string;
   thumbnail?: string;
   source?: string;
+  original?: string;
+  image?: string;
   exact_matches?: boolean;
 };
 
 type SerpResponse = {
   error?: string;
   organic_results?: SearchResult[];
-  visual_matches?: Array<SearchResult & { image?: string }>;
+  visual_matches?: SearchResult[];
+  pages_with_this_image?: SearchResult[];
 };
 
 type RawCandidate = {
@@ -46,6 +49,14 @@ type TextQuery = {
   platform: (typeof targetPlatforms)[number];
   phrase: string;
   engine: "baidu" | "google";
+};
+
+type ImageSearchEngine = "google_lens" | "bing_reverse_image";
+
+type ImageQuery = {
+  imageUrl: string;
+  imageIndex: number;
+  engine: ImageSearchEngine;
 };
 
 function apiKey() {
@@ -116,6 +127,15 @@ function textSearchLimit() {
   return Number.isFinite(configured) ? Math.max(4, Math.min(36, Math.round(configured))) : 18;
 }
 
+function imageSearchEngines(): ImageSearchEngine[] {
+  const allowed = new Set<ImageSearchEngine>(["google_lens", "bing_reverse_image"]);
+  const configured = (process.env.SCAN_IMAGE_ENGINES || "google_lens,bing_reverse_image")
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value): value is ImageSearchEngine => allowed.has(value as ImageSearchEngine));
+  return [...new Set(configured)].length ? [...new Set(configured)] : ["google_lens", "bing_reverse_image"];
+}
+
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
@@ -174,47 +194,50 @@ async function textCandidates(note: SourceNote, selected: PlatformId[]) {
 async function imageCandidates(note: SourceNote, selected: PlatformId[], publicOrigin?: string) {
   const images = note.imageUrls.slice(0, 4);
   if (!images.length) return { candidates: [], warnings: [], attemptedQueries: 0, successfulQueries: 0 } satisfies CandidateBatch;
-  const batches = await mapLimit(images, 2, async (imageUrl, imageIndex) => {
+  const queries: ImageQuery[] = images.flatMap((imageUrl, imageIndex) => imageSearchEngines()
+    .map((engine) => ({ imageUrl, imageIndex, engine })));
+  const batches = await mapLimit(queries, 3, async ({ imageUrl, imageIndex, engine }) => {
     try {
-      const data = await serpApi({
-        engine: "google_lens",
-        url: createSourceImageProxyUrl(imageUrl, { origin: publicOrigin }),
-        type: "visual_matches",
-        hl: "zh-CN",
-        country: "cn",
-        safe: "active",
-      });
-      const candidates = (data.visual_matches || [])
-        .slice(0, 40)
-        .map((result, resultIndex) => {
-          const targetUrl = result.link ? canonicalUrl(result.link) : null;
-          const position = Number.isFinite(result.position) ? Number(result.position) : resultIndex + 1;
-          return { result, targetUrl, position, platform: targetUrl ? platformForUrl(targetUrl) : null };
-        })
-        .filter((item) => item.targetUrl && item.platform && selected.includes(item.platform.id))
-        .map(({ result, targetUrl, position, platform }) => {
-          const exact = result.exact_matches === true;
-          const imageScore = exact ? 0.98 : position <= 3 ? 0.88 : position <= 10 ? 0.82 : position <= 20 ? 0.77 : 0.73;
-          const evidence = exact
+      const proxyUrl = createSourceImageProxyUrl(imageUrl, { origin: publicOrigin });
+      const data = await serpApi(engine === "google_lens"
+        ? { engine, url: proxyUrl, type: "visual_matches", hl: "zh-CN", country: "cn", safe: "active" }
+        : { engine, image_url: proxyUrl, mkt: "zh-CN", count: "50" });
+      const rawResults = engine === "google_lens" ? (data.visual_matches || []) : (data.pages_with_this_image || []);
+      const candidates = rawResults.slice(0, 40).map((result, resultIndex) => {
+        const rawTargetUrl = engine === "bing_reverse_image" ? result.source : result.link;
+        const targetUrl = rawTargetUrl ? canonicalUrl(rawTargetUrl) : null;
+        const position = Number.isFinite(result.position) ? Number(result.position) : resultIndex + 1;
+        return { result, targetUrl, position, platform: targetUrl ? platformForUrl(targetUrl) : null };
+      }).filter((item) => item.targetUrl && item.platform && selected.includes(item.platform.id)).map(({ result, targetUrl, position, platform }) => {
+        const googleExact = engine === "google_lens" && result.exact_matches === true;
+        const imageScore = engine === "bing_reverse_image"
+          ? 0.96
+          : googleExact ? 0.98 : position <= 3 ? 0.88 : position <= 10 ? 0.82 : position <= 20 ? 0.77 : 0.73;
+        const evidence = engine === "bing_reverse_image"
+          ? `Bing 同图页面命中：原笔记第 ${imageIndex + 1} 张图`
+          : googleExact
             ? `Google Lens 精确图片命中：原笔记第 ${imageIndex + 1} 张图`
             : `Google Lens 视觉匹配（第 ${position} 位）：原笔记第 ${imageIndex + 1} 张图`;
-          return {
-            targetUrl: targetUrl as string,
-            platform: platform!.id,
-            platformName: platform!.name,
-            title: result.title || `${platform!.name}上的疑似盗图内容`,
-            snippet: exact
+        return {
+          targetUrl: targetUrl as string,
+          platform: platform!.id,
+          platformName: platform!.name,
+          title: result.title || `${platform!.name}上的疑似盗图内容`,
+          snippet: engine === "bing_reverse_image"
+            ? `Bing 在该公开网页中发现了原笔记第 ${imageIndex + 1} 张图片的同图页面。`
+            : googleExact
               ? `Google Lens 将该公开网页标记为原笔记第 ${imageIndex + 1} 张图片的精确匹配。`
               : `Google Lens 在公开网页中发现了与原笔记第 ${imageIndex + 1} 张图片视觉相似的内容，排序第 ${position} 位。`,
-            thumbnailUrl: result.thumbnail || result.image || null,
-            textScore: 0,
-            imageScore,
-            evidence: [evidence],
-          } satisfies RawCandidate;
-        });
+          thumbnailUrl: result.thumbnail || result.original || result.image || null,
+          textScore: 0,
+          imageScore,
+          evidence: [evidence],
+        } satisfies RawCandidate;
+      });
       return { candidates, warnings: [], successful: true };
     } catch (error) {
-      return { candidates: [] as RawCandidate[], warnings: [`第 ${imageIndex + 1} 张图片检索失败：${errorMessage(error)}`], successful: false };
+      const engineName = engine === "google_lens" ? "Google Lens" : "Bing";
+      return { candidates: [] as RawCandidate[], warnings: [`第 ${imageIndex + 1} 张图片的 ${engineName} 检索失败：${errorMessage(error)}`], successful: false };
     }
   });
   return {
@@ -264,7 +287,7 @@ export async function scanPublicWeb(note: SourceNote, selectedPlatforms: Platfor
   const matches: CandidateMatch[] = [...merged.values()]
     .map((candidate) => {
       const textEvidenceCount = candidate.evidence.filter((item) => item.includes("文字命中")).length;
-      const imageEvidenceCount = candidate.evidence.filter((item) => item.startsWith("Google Lens")).length;
+      const imageEvidenceCount = candidate.evidence.filter((item) => item.startsWith("Google Lens") || item.startsWith("Bing ")).length;
       const textScore = Math.min(0.98, candidate.textScore + Math.min(0.06, Math.max(0, textEvidenceCount - 1) * 0.02));
       const imageScore = Math.min(0.98, candidate.imageScore + Math.min(0.08, Math.max(0, imageEvidenceCount - 1) * 0.03));
       const both = textScore >= 0.38 && imageScore >= 0.7;

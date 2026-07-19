@@ -24,12 +24,44 @@ export function textSimilarity(source: string, candidate: string) {
   return leftSet.size + rightSet.size ? (2 * overlap) / (leftSet.size + rightSet.size) : 0;
 }
 
-export function extractSearchPhrases(note: TextSource) {
-  const parts = `${note.title}。${note.text}`
-    .split(/[。！？!?；;\n]/)
-    .map((part) => part.replace(/#[^#\s]+/g, "").trim())
-    .filter((part) => part.length >= 10)
-    .map((part) => part.slice(0, 42));
-  return [...new Set(parts)].sort((a, b) => b.length - a.length).slice(0, 3);
+function cleanSearchSegment(value: string) {
+  return value
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/#[^#\s]{1,50}#/g, " ")
+    .replace(/#[^#\s]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
+function phraseWindows(value: string) {
+  const characters = [...value];
+  const size = 42;
+  if (characters.length <= size) return [value];
+  const starts = [0, Math.floor((characters.length - size) / 2), characters.length - size];
+  return [...new Set(starts.map((start) => characters.slice(start, start + size).join("").trim()))];
+}
+
+function phraseScore(value: string) {
+  const normalized = [...normalizeText(value)];
+  const uniqueRatio = normalized.length ? new Set(normalized).size / normalized.length : 0;
+  const specificMarks = value.match(/[0-9A-Za-z「」《》【】]/g)?.length || 0;
+  const genericPhrases = value.match(/(?:点赞|收藏|关注|转发|欢迎评论|希望大家|今天给大家|姐妹们|宝子们|记得)/g)?.length || 0;
+  return normalized.length + uniqueRatio * 18 + Math.min(8, specificMarks) * 0.8 - genericPhrases * 10;
+}
+
+export function extractSearchPhrases(note: TextSource) {
+  const bodyParts = note.text
+    .split(/[。！？!?；;\n]/)
+    .map(cleanSearchSegment)
+    .filter((part) => [...part].length >= 10);
+  const title = cleanSearchSegment(note.title);
+  const segments = [...([...title].length >= 6 ? [title] : []), ...bodyParts];
+  const candidates = [...new Set(segments.flatMap(phraseWindows))]
+    .sort((left, right) => phraseScore(right) - phraseScore(left));
+  const selected: string[] = [];
+  for (const candidate of candidates) {
+    if (selected.every((existing) => textSimilarity(existing, candidate) < 0.72)) selected.push(candidate);
+    if (selected.length === 6) break;
+  }
+  return selected;
+}

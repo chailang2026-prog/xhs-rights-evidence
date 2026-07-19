@@ -147,6 +147,15 @@ test("builds distinctive search phrases and removes hashtags", () => {
   assert.ok(phrases.some((phrase) => phrase.includes("木栈道")));
 });
 
+test("samples the middle and end of a long paragraph instead of searching only its opening", () => {
+  const phrases = extractSearchPhrases({
+    title: "厦门旧城慢走记录",
+    text: "这一段开头先介绍普通的出发准备和天气情况然后继续描述沿途街景没有使用句号直到中段出现只有本次路线才有的B17蓝色门牌和榕树拐角接着继续向前经过几段安静巷道最后抵达隐藏观景台并看到钟楼倒影这个结尾同样很有辨识度",
+  });
+  assert.ok(phrases.some((phrase) => phrase.includes("B17蓝色门牌")));
+  assert.ok(phrases.some((phrase) => phrase.includes("隐藏观景台")));
+});
+
 test("signs short-lived image proxy URLs and rejects tampering or SSRF targets", () => {
   const previousPassword = process.env.APP_PASSWORD;
   const previousSiteUrl = process.env.NEXT_PUBLIC_SITE_URL;
@@ -214,10 +223,12 @@ test("combines copied text and Lens image evidence into one reviewable link", as
   const previousSiteUrl = process.env.NEXT_PUBLIC_SITE_URL;
   const previousSerpKey = process.env.SERPAPI_API_KEY;
   const previousLimit = process.env.SCAN_MAX_TEXT_SEARCHES;
+  const previousImageEngines = process.env.SCAN_IMAGE_ENGINES;
   process.env.APP_PASSWORD = "a-strong-private-password";
   process.env.NEXT_PUBLIC_SITE_URL = "https://radar.example";
   process.env.SERPAPI_API_KEY = "test-serp-key";
   process.env.SCAN_MAX_TEXT_SEARCHES = "6";
+  process.env.SCAN_IMAGE_ENGINES = "google_lens";
   try {
     const engines = new Set();
     globalThis.fetch = async (value) => {
@@ -283,6 +294,8 @@ test("combines copied text and Lens image evidence into one reviewable link", as
     else process.env.SERPAPI_API_KEY = previousSerpKey;
     if (previousLimit === undefined) delete process.env.SCAN_MAX_TEXT_SEARCHES;
     else process.env.SCAN_MAX_TEXT_SEARCHES = previousLimit;
+    if (previousImageEngines === undefined) delete process.env.SCAN_IMAGE_ENGINES;
+    else process.env.SCAN_IMAGE_ENGINES = previousImageEngines;
   }
 });
 
@@ -337,9 +350,11 @@ test("raises image lead strength when multiple original images point to the same
   const previousPassword = process.env.APP_PASSWORD;
   const previousSiteUrl = process.env.NEXT_PUBLIC_SITE_URL;
   const previousSerpKey = process.env.SERPAPI_API_KEY;
+  const previousImageEngines = process.env.SCAN_IMAGE_ENGINES;
   process.env.APP_PASSWORD = "a-strong-private-password";
   process.env.NEXT_PUBLIC_SITE_URL = "https://radar.example";
   process.env.SERPAPI_API_KEY = "test-serp-key";
+  process.env.SCAN_IMAGE_ENGINES = "google_lens";
   try {
     let imageSearches = 0;
     globalThis.fetch = async (value) => {
@@ -378,6 +393,60 @@ test("raises image lead strength when multiple original images point to the same
     else process.env.NEXT_PUBLIC_SITE_URL = previousSiteUrl;
     if (previousSerpKey === undefined) delete process.env.SERPAPI_API_KEY;
     else process.env.SERPAPI_API_KEY = previousSerpKey;
+    if (previousImageEngines === undefined) delete process.env.SCAN_IMAGE_ENGINES;
+    else process.env.SCAN_IMAGE_ENGINES = previousImageEngines;
+  }
+});
+
+test("collects Bing pages-with-this-image results as exact image leads", async () => {
+  const previousPassword = process.env.APP_PASSWORD;
+  const previousSiteUrl = process.env.NEXT_PUBLIC_SITE_URL;
+  const previousSerpKey = process.env.SERPAPI_API_KEY;
+  const previousImageEngines = process.env.SCAN_IMAGE_ENGINES;
+  process.env.APP_PASSWORD = "a-strong-private-password";
+  process.env.NEXT_PUBLIC_SITE_URL = "https://radar.example";
+  process.env.SERPAPI_API_KEY = "test-serp-key";
+  process.env.SCAN_IMAGE_ENGINES = "bing_reverse_image";
+  try {
+    globalThis.fetch = async (value) => {
+      const url = new URL(String(value));
+      assert.equal(url.searchParams.get("engine"), "bing_reverse_image");
+      assert.match(url.searchParams.get("image_url") || "", /^https:\/\/radar\.example\/api\/source-image/);
+      return Response.json({
+        pages_with_this_image: [{
+          position: 1,
+          title: "飞猪上的同图旅行内容",
+          link: "https://www.bing.com/images/search?id=wrapped",
+          source: "https://travel.taobao.com/trip/copied-image?utm_source=bing",
+          original: "https://img.example.com/copied.jpg",
+          thumbnail: "https://thumb.example.com/copied.jpg",
+        }],
+      });
+    };
+
+    const result = await scanPublicWeb({
+      url: "https://www.xiaohongshu.com/explore/source-note",
+      title: "短标题",
+      text: "短正文",
+      imageUrls: ["https://sns-webpic-qc.xhscdn.com/notes/source.webp"],
+      author: null,
+    }, ["fliggy"], "https://radar.example");
+
+    assert.equal(result.partial, false);
+    assert.equal(result.matches.length, 1);
+    assert.equal(result.matches[0].platform, "fliggy");
+    assert.equal(result.matches[0].imageScore, 0.96);
+    assert.match(result.matches[0].evidence[0], /^Bing 同图页面命中/);
+    assert.doesNotMatch(result.matches[0].targetUrl, /utm_source/);
+  } finally {
+    if (previousPassword === undefined) delete process.env.APP_PASSWORD;
+    else process.env.APP_PASSWORD = previousPassword;
+    if (previousSiteUrl === undefined) delete process.env.NEXT_PUBLIC_SITE_URL;
+    else process.env.NEXT_PUBLIC_SITE_URL = previousSiteUrl;
+    if (previousSerpKey === undefined) delete process.env.SERPAPI_API_KEY;
+    else process.env.SERPAPI_API_KEY = previousSerpKey;
+    if (previousImageEngines === undefined) delete process.env.SCAN_IMAGE_ENGINES;
+    else process.env.SCAN_IMAGE_ENGINES = previousImageEngines;
   }
 });
 
