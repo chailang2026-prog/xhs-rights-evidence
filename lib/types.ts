@@ -6,7 +6,7 @@ export const targetPlatforms: Array<{
   name: string;
   domains: string[];
 }> = [
-  { id: "dianping", name: "大众点评", domains: ["dianping.com"] },
+  { id: "dianping", name: "大众点评", domains: ["dianping.com", "dpurl.cn"] },
   { id: "ctrip", name: "携程", domains: ["ctrip.com", "trip.com"] },
   { id: "qunar", name: "去哪儿", domains: ["qunar.com"] },
   { id: "fliggy", name: "飞猪", domains: ["fliggy.com", "alitrip.com", "travel.taobao.com", "trip.taobao.com"] },

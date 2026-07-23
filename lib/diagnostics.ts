@@ -67,21 +67,28 @@ function siteCheck(): DiagnosticCheck {
 }
 
 function scanConfigCheck(): DiagnosticCheck {
-  const textLimit = Number(process.env.SCAN_MAX_TEXT_SEARCHES || 18);
+  const textLimit = Number(process.env.SCAN_MAX_TEXT_SEARCHES || 24);
+  const imageLimit = Number(process.env.SCAN_MAX_IMAGE_SEARCHES || 24);
+  const sourceImages = Number(process.env.SCAN_MAX_IMAGES || 8);
+  const platformPageFetches = Number(process.env.SCAN_MAX_PLATFORM_PAGE_FETCHES || 12);
   const imageEngines = (process.env.SCAN_IMAGE_ENGINES || "google_lens_exact,google_lens,bing_reverse_image").split(",").map((value) => value.trim()).filter(Boolean);
   const validEngines = imageEngines.filter((value) => value === "google_lens_exact" || value === "google_lens" || value === "bing_reverse_image");
   const hasInvalidEngine = validEngines.length !== imageEngines.length;
-  if (!Number.isFinite(textLimit) || textLimit <= 0 || validEngines.length === 0) {
-    return { id: "scan-config", label: "扫描配置", status: "error", detail: "文字查询预算或图片引擎配置无效。" };
+  if (![textLimit, imageLimit, sourceImages, platformPageFetches].every(Number.isFinite)
+    || textLimit <= 0 || imageLimit <= 0 || sourceImages <= 0 || platformPageFetches < 0 || validEngines.length === 0) {
+    return { id: "scan-config", label: "扫描配置", status: "error", detail: "文字、图片或平台页面扫描配置无效。" };
   }
   const effectiveEngines = new Set(validEngines);
   if (effectiveEngines.has("google_lens")) effectiveEngines.add("google_lens_exact");
-  const effectiveTextLimit = Math.max(4, Math.min(36, Math.round(textLimit)));
+  const effectiveTextLimit = Math.max(4, Math.min(48, Math.round(textLimit)));
+  const effectiveImageLimit = Math.max(2, Math.min(36, Math.round(imageLimit)));
+  const effectiveSourceImages = Math.max(1, Math.min(9, Math.round(sourceImages)));
+  const effectivePlatformPageFetches = Math.max(0, Math.min(24, Math.round(platformPageFetches)));
   return {
     id: "scan-config",
     label: "扫描配置",
     status: effectiveEngines.size < 3 || hasInvalidEngine ? "warning" : "ok",
-    detail: `文字查询上限 ${effectiveTextLimit} 次；图片引擎 ${[...effectiveEngines].join(" + ")}。`,
+    detail: `文字 ${effectiveTextLimit} 次；图片 ${effectiveImageLimit} 次 / 最多 ${effectiveSourceImages} 张原图；公开平台页面复核 ${effectivePlatformPageFetches} 个；图片引擎 ${[...effectiveEngines].join(" + ")}。`,
   };
 }
 

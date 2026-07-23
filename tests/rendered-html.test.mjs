@@ -28,13 +28,17 @@ test("implements the source-note scanning workflow", async () => {
   assert.match(route, /scanPublicWeb/);
   assert.match(rerunRoute, /extractSourceNote/);
   assert.match(rerunRoute, /refreshScanSource/);
-  assert.match(search, /\["baidu", "google"\]/);
+  assert.match(search, /engine: "baidu"/);
+  assert.match(search, /engine: "google"/);
   assert.match(search, /engine === "google_lens"/);
   assert.match(search, /google_lens_exact/);
   assert.match(search, /data\.exact_matches/);
   assert.match(search, /bing_reverse_image/);
   assert.match(search, /createSourceImageProxyUrl/);
   assert.match(search, /extractSearchKeywords/);
+  assert.match(search, /bestPassageSimilarity/);
+  assert.match(search, /SCAN_MAX_IMAGE_SEARCHES/);
+  assert.match(search, /SCAN_MAX_PLATFORM_PAGE_FETCHES/);
   assert.match(search, /改写特征词/);
   assert.match(imageRoute, /verifySourceImageProxyUrl/);
   assert.match(imageRoute, /12_000_000/);
@@ -42,6 +46,7 @@ test("implements the source-note scanning workflow", async () => {
   assert.match(diagnostics, /account\.json/);
   assert.doesNotMatch(diagnostics, /account_email/);
   assert.match(source, /xhslink\.com/);
+  assert.match(source, /xhslink\.cn/);
   assert.doesNotMatch(scanner, /添加侵权链接|手工登记/);
 });
 

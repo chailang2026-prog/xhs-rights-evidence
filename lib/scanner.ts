@@ -4,7 +4,7 @@ import {
   type PlatformId,
   type SourceNote,
 } from "./types.ts";
-import { extractSearchKeywords, extractSearchPhrases, textSimilarity } from "./matching.ts";
+import { bestPassageSimilarity, cleanComparableText, extractSearchKeywords, extractSearchPhrases, textSimilarity } from "./matching.ts";
 import { createSourceImageProxyUrl } from "./source-images.ts";
 
 type SearchResult = {
@@ -86,7 +86,7 @@ function platformForUrl(value: string) {
     const url = new URL(value);
     if (url.protocol !== "http:" && url.protocol !== "https:") return null;
     const host = url.hostname.toLowerCase();
-    if (["xiaohongshu.com", "xhslink.com", "xhs.cn", "rednote.com", "google.com", "baidu.com", "serpapi.com"].some((domain) => host === domain || host.endsWith(`.${domain}`))) return null;
+    if (["xiaohongshu.com", "xhslink.com", "xhslink.cn", "xhs.cn", "rednote.com", "google.com", "baidu.com", "serpapi.com"].some((domain) => host === domain || host.endsWith(`.${domain}`))) return null;
     return targetPlatforms.find((platform) => platform.domains.some((domain) => host === domain || host.endsWith(`.${domain}`)))
       || targetPlatforms.find((platform) => platform.id === "web")
       || null;
@@ -101,7 +101,7 @@ function canonicalUrl(value: string) {
     if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) return null;
     url.hash = "";
     for (const key of [...url.searchParams.keys()]) {
-      if (/^(utm_|spm|from|source|ref|share)/i.test(key)) url.searchParams.delete(key);
+      if (/^(utm_|spm|from|source|ref|share|msource|sceneType|bizType|track|trace)/i.test(key)) url.searchParams.delete(key);
     }
     if (url.pathname !== "/") url.pathname = url.pathname.replace(/\/+$/, "");
     return url.toString();
@@ -125,8 +125,23 @@ async function mapLimit<T, R>(items: T[], limit: number, task: (item: T, index: 
 }
 
 function textSearchLimit() {
-  const configured = Number(process.env.SCAN_MAX_TEXT_SEARCHES || 18);
-  return Number.isFinite(configured) ? Math.max(4, Math.min(36, Math.round(configured))) : 18;
+  const configured = Number(process.env.SCAN_MAX_TEXT_SEARCHES || 24);
+  return Number.isFinite(configured) ? Math.max(4, Math.min(48, Math.round(configured))) : 24;
+}
+
+function imageSearchLimit() {
+  const configured = Number(process.env.SCAN_MAX_IMAGE_SEARCHES || 24);
+  return Number.isFinite(configured) ? Math.max(2, Math.min(36, Math.round(configured))) : 24;
+}
+
+function sourceImageLimit() {
+  const configured = Number(process.env.SCAN_MAX_IMAGES || 8);
+  return Number.isFinite(configured) ? Math.max(1, Math.min(9, Math.round(configured))) : 8;
+}
+
+function platformPageFetchLimit() {
+  const configured = Number(process.env.SCAN_MAX_PLATFORM_PAGE_FETCHES || 12);
+  return Number.isFinite(configured) ? Math.max(0, Math.min(24, Math.round(configured))) : 12;
 }
 
 function imageSearchEngines(): ImageSearchEngine[] {
@@ -150,13 +165,20 @@ async function textCandidates(note: SourceNote, selected: PlatformId[]) {
   const phrases = extractSearchPhrases(note);
   if (!phrases.length) return { candidates: [], warnings: [], attemptedQueries: 0, successfulQueries: 0 } satisfies CandidateBatch;
   const platforms = targetPlatforms.filter((platform) => selected.includes(platform.id));
-  const primaryExact = (["baidu", "google"] as const).flatMap((engine) => platforms
-    .map((platform) => ({ platform, phrase: phrases[0], engine, mode: "exact" as const })));
-  const keywords = extractSearchKeywords(note).join(" ");
-  const adapted = keywords ? platforms.map((platform) => ({ platform, phrase: keywords, engine: "baidu" as const, mode: "keywords" as const })) : [];
-  const secondaryExact = phrases.slice(1, 3).flatMap((phrase) => (["baidu", "google"] as const)
-    .flatMap((engine) => platforms.map((platform) => ({ platform, phrase, engine, mode: "exact" as const }))));
-  const queries: TextQuery[] = [...primaryExact, ...adapted, ...secondaryExact].slice(0, textSearchLimit());
+  const keywords = extractSearchKeywords(note);
+  const keywordGroups = Array.from({ length: Math.ceil(keywords.length / 2) }, (_, index) => keywords.slice(index * 2, index * 2 + 2).join(" "));
+  const variants = [
+    { phrase: phrases[0], engine: "baidu" as const, mode: "exact" as const },
+    { phrase: phrases[1] || phrases[0], engine: "google" as const, mode: "exact" as const },
+    ...(keywordGroups[0] ? [{ phrase: keywordGroups[0], engine: "baidu" as const, mode: "keywords" as const }] : []),
+    ...(keywordGroups[1] ? [{ phrase: keywordGroups[1], engine: "google" as const, mode: "keywords" as const }] : []),
+    ...(phrases[2] ? [{ phrase: phrases[2], engine: "baidu" as const, mode: "exact" as const }] : []),
+    { phrase: phrases[0], engine: "google" as const, mode: "exact" as const },
+    ...(keywordGroups[2] ? [{ phrase: keywordGroups[2], engine: "baidu" as const, mode: "keywords" as const }] : []),
+  ];
+  const queries: TextQuery[] = variants
+    .flatMap((variant) => platforms.map((platform) => ({ platform, ...variant })))
+    .slice(0, textSearchLimit());
   const batches = await mapLimit(queries, 3, async ({ platform, phrase, engine, mode }) => {
     const exactPhrase = phrase.replace(/"/g, "");
     try {
@@ -174,7 +196,11 @@ async function textCandidates(note: SourceNote, selected: PlatformId[]) {
         .filter((item) => item.targetUrl && item.resolvedPlatform && selected.includes(item.resolvedPlatform.id) && (platform.id === "web" || item.resolvedPlatform.id === platform.id))
         .map(({ result, targetUrl, resolvedPlatform }) => {
           const candidateText = `${result.title || ""} ${result.snippet || ""}`;
-          const measuredScore = Math.max(...phrases.map((item) => textSimilarity(item, candidateText)), textSimilarity(note.title, candidateText));
+          const measuredScore = Math.max(
+            ...phrases.map((item) => textSimilarity(item, candidateText)),
+            textSimilarity(note.title, candidateText),
+            bestPassageSimilarity(note, candidateText),
+          );
           // Search engines sometimes omit the matched sentence from their snippet. A result
           // returned for the quoted source phrase remains a useful lead, but at low strength.
           const score = mode === "exact" ? Math.max(measuredScore, 0.36) : measuredScore;
@@ -208,10 +234,18 @@ async function textCandidates(note: SourceNote, selected: PlatformId[]) {
 }
 
 async function imageCandidates(note: SourceNote, selected: PlatformId[], publicOrigin?: string) {
-  const images = note.imageUrls.slice(0, 4);
+  const limit = sourceImageLimit();
+  const imageIndexes = note.imageUrls.length <= limit
+    ? note.imageUrls.map((_, index) => index)
+    : Array.from({ length: limit }, (_, index) => Math.round(index * (note.imageUrls.length - 1) / Math.max(1, limit - 1)));
+  const images = [...new Set(imageIndexes)].map((imageIndex) => ({ imageUrl: note.imageUrls[imageIndex], imageIndex }));
   if (!images.length) return { candidates: [], warnings: [], attemptedQueries: 0, successfulQueries: 0 } satisfies CandidateBatch;
-  const queries: ImageQuery[] = images.flatMap((imageUrl, imageIndex) => imageSearchEngines()
-    .map((engine) => ({ imageUrl, imageIndex, engine })));
+  const configuredEngines = imageSearchEngines();
+  const preferredEngines = (["google_lens", "google_lens_exact", "bing_reverse_image"] as const)
+    .filter((engine) => configuredEngines.includes(engine));
+  const queries: ImageQuery[] = preferredEngines.flatMap((engine) => images
+    .map(({ imageUrl, imageIndex }) => ({ imageUrl, imageIndex, engine })))
+    .slice(0, imageSearchLimit());
   const batches = await mapLimit(queries, 3, async ({ imageUrl, imageIndex, engine }) => {
     try {
       const proxyUrl = createSourceImageProxyUrl(imageUrl, { origin: publicOrigin });
@@ -221,7 +255,7 @@ async function imageCandidates(note: SourceNote, selected: PlatformId[], publicO
       const rawResults = engine === "google_lens_exact"
         ? (data.exact_matches || [])
         : engine === "google_lens" ? (data.visual_matches || []) : (data.pages_with_this_image || []);
-      const candidates = rawResults.slice(0, 40).map((result, resultIndex) => {
+      const candidates = rawResults.slice(0, 30).map((result, resultIndex) => {
         const rawTargetUrl = engine === "bing_reverse_image" ? result.source : result.link;
         const targetUrl = rawTargetUrl ? canonicalUrl(rawTargetUrl) : null;
         const position = Number.isFinite(result.position) ? Number(result.position) : resultIndex + 1;
@@ -230,7 +264,7 @@ async function imageCandidates(note: SourceNote, selected: PlatformId[], publicO
         const googleExact = engine === "google_lens_exact" || (engine === "google_lens" && result.exact_matches === true);
         const imageScore = engine === "bing_reverse_image"
           ? 0.96
-          : googleExact ? 0.98 : position <= 3 ? 0.88 : position <= 10 ? 0.82 : position <= 20 ? 0.77 : 0.73;
+          : googleExact ? 0.98 : position <= 3 ? 0.79 : position <= 8 ? 0.7 : position <= 15 ? 0.62 : 0.54;
         const evidence = engine === "bing_reverse_image"
           ? `Bing 同图页面命中：原笔记第 ${imageIndex + 1} 张图`
           : googleExact
@@ -270,6 +304,117 @@ function rounded(value: number) {
   return Math.round(Math.max(0, Math.min(0.99, value)) * 100) / 100;
 }
 
+function decodeHtml(value: string) {
+  const named: Record<string, string> = { amp: "&", quot: "\"", apos: "'", lt: "<", gt: ">", nbsp: " " };
+  return value.replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (_, entity: string) => {
+    if (entity[0] === "#") {
+      const hexadecimal = entity[1]?.toLowerCase() === "x";
+      return String.fromCodePoint(Number.parseInt(entity.slice(hexadecimal ? 2 : 1), hexadecimal ? 16 : 10));
+    }
+    return named[entity.toLowerCase()] || `&${entity};`;
+  });
+}
+
+function structuredPageText(html: string) {
+  const values: string[] = [];
+  for (const tag of html.match(/<meta\b[^>]*>/gi) || []) {
+    const attributes = Object.fromEntries(
+      [...tag.matchAll(/([:\w-]+)\s*=\s*(["'])(.*?)\2/gi)]
+        .map((match) => [match[1].toLowerCase(), decodeHtml(match[3])]),
+    );
+    const key = (attributes.property || attributes.name || "").toLowerCase();
+    if (["description", "og:title", "og:description", "twitter:title", "twitter:description"].includes(key) && attributes.content) {
+      values.push(attributes.content);
+    }
+  }
+  for (const match of html.matchAll(/<script\b[^>]*type\s*=\s*(["'])application\/ld\+json\1[^>]*>([\s\S]*?)<\/script>/gi)) {
+    if (match[2].length > 200_000) continue;
+    try {
+      const data = JSON.parse(decodeHtml(match[2]));
+      const visit = (value: unknown) => {
+        if (!value || typeof value !== "object") return;
+        if (Array.isArray(value)) {
+          value.slice(0, 30).forEach(visit);
+          return;
+        }
+        for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+          if (["headline", "description", "articleBody"].includes(key) && typeof nested === "string") values.push(nested);
+          else if (typeof nested === "object") visit(nested);
+        }
+      };
+      visit(data);
+    } catch {
+      // Malformed optional structured data should not prevent visible text checks.
+    }
+  }
+  return values.join(" ");
+}
+
+async function fetchPlatformPageText(candidate: RawCandidate) {
+  if (candidate.platform === "web") return "";
+  const platform = targetPlatforms.find((item) => item.id === candidate.platform);
+  if (!platform) return "";
+  let currentUrl = new URL(candidate.targetUrl);
+  const allowed = (url: URL) => platform.domains.some((domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`));
+  if (currentUrl.protocol !== "https:" || currentUrl.username || currentUrl.password || !allowed(currentUrl)) return "";
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  try {
+    for (let redirects = 0; redirects <= 3; redirects += 1) {
+      const response = await fetch(currentUrl, {
+        redirect: "manual",
+        signal: controller.signal,
+        headers: {
+          "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 Version/17.5 Mobile/15E148 Safari/604.1",
+          accept: "text/html,application/xhtml+xml",
+          "accept-language": "zh-CN,zh;q=0.9",
+        },
+      });
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        const location = response.headers.get("location");
+        if (!location) return "";
+        const nextUrl = new URL(location, currentUrl);
+        if (nextUrl.protocol === "http:") nextUrl.protocol = "https:";
+        if (nextUrl.protocol !== "https:" || !allowed(nextUrl)) return "";
+        currentUrl = nextUrl;
+        continue;
+      }
+      if (!response.ok || !(response.headers.get("content-type") || "").toLowerCase().includes("text/html")) return "";
+      const contentLength = Number(response.headers.get("content-length") || 0);
+      if (contentLength > 3_000_000) return "";
+      const html = await response.text();
+      if (html.length > 3_000_000) return "";
+      const visible = `${structuredPageText(html)} ${decodeHtml(html
+        .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
+        .replace(/<style\b[\s\S]*?<\/style>/gi, " ")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\s+/g, " "))}`;
+      return cleanComparableText(visible).slice(0, 30_000);
+    }
+    return "";
+  } catch {
+    return "";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function enrichWithPlatformPages(note: SourceNote, candidates: RawCandidate[]) {
+  const limit = platformPageFetchLimit();
+  if (!limit) return;
+  const prioritized = candidates
+    .filter((candidate) => candidate.platform !== "web")
+    .sort((left, right) => Math.max(right.imageScore, right.textScore) - Math.max(left.imageScore, left.textScore))
+    .slice(0, limit);
+  await mapLimit(prioritized, 3, async (candidate) => {
+    const pageText = await fetchPlatformPageText(candidate);
+    if (!pageText) return;
+    const score = bestPassageSimilarity(note, pageText);
+    if (score > candidate.textScore) candidate.textScore = score;
+    if (score >= 0.32) candidate.evidence.push(`目标平台公开页面正文比对：最相似段落 ${Math.round(score * 100)}%`);
+  });
+}
+
 export async function scanPublicWeb(note: SourceNote, selectedPlatforms: PlatformId[], publicOrigin?: string) {
   const settled = await Promise.allSettled([
     textCandidates(note, selectedPlatforms),
@@ -301,11 +446,16 @@ export async function scanPublicWeb(note: SourceNote, selectedPlatforms: Platfor
     current.evidence = [...new Set([...current.evidence, ...candidate.evidence])];
     if (candidate.snippet.length > current.snippet.length) current.snippet = candidate.snippet;
   }
+  await enrichWithPlatformPages(note, [...merged.values()]);
 
   const matches: CandidateMatch[] = [...merged.values()]
     .map((candidate) => {
       const textEvidenceCount = candidate.evidence.filter((item) => item.includes("文字命中")).length;
-      const imageEvidenceCount = candidate.evidence.filter((item) => item.startsWith("Google Lens") || item.startsWith("Bing ")).length;
+      const imageEvidenceCount = new Set(candidate.evidence.flatMap((item) => {
+        if (!item.startsWith("Google Lens") && !item.startsWith("Bing ")) return [];
+        const match = item.match(/第 (\d+) 张/);
+        return match ? [match[1]] : [];
+      })).size;
       const textScore = Math.min(0.98, candidate.textScore + Math.min(0.06, Math.max(0, textEvidenceCount - 1) * 0.02));
       const imageScore = Math.min(0.98, candidate.imageScore + Math.min(0.08, Math.max(0, imageEvidenceCount - 1) * 0.03));
       const both = textScore >= 0.38 && imageScore >= 0.7;

@@ -24,11 +24,14 @@ SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=服务端专用密钥
 SERPAPI_API_KEY=SerpApi密钥
 NEXT_PUBLIC_SITE_URL=https://你的正式域名
-SCAN_MAX_TEXT_SEARCHES=18
+SCAN_MAX_TEXT_SEARCHES=24
+SCAN_MAX_IMAGES=8
+SCAN_MAX_IMAGE_SEARCHES=24
+SCAN_MAX_PLATFORM_PAGE_FETCHES=12
 SCAN_IMAGE_ENGINES=google_lens_exact,google_lens,bing_reverse_image
 ```
 
-`SUPABASE_SERVICE_ROLE_KEY` 与 `SERPAPI_API_KEY` 只能配置在服务端环境变量中，禁止写进浏览器代码或提交到 GitHub。`SCAN_MAX_TEXT_SEARCHES` 可选，默认每条笔记最多执行 18 次文字检索；调低会减少 SerpApi 用量，也会降低覆盖率。`SCAN_IMAGE_ENGINES` 默认同时使用 Google Lens 精确同图、Google Lens 视觉相似与 Bing 同图页面；旧配置中的 `google_lens` 会自动同时启用精确同图，若额度有限可删减引擎，但会降低图片侵权线索覆盖率。
+`SUPABASE_SERVICE_ROLE_KEY` 与 `SERPAPI_API_KEY` 只能配置在服务端环境变量中，禁止写进浏览器代码或提交到 GitHub。`SCAN_MAX_TEXT_SEARCHES` 默认 24 次，按平台轮流执行不同原句和独立特征组合，不会把预算全部耗在同一个长句上。`SCAN_MAX_IMAGES` 默认从整篇笔记均匀选取最多 8 张原图，`SCAN_MAX_IMAGE_SEARCHES` 默认 24 次。`SCAN_MAX_PLATFORM_PAGE_FETCHES` 默认读取最多 12 个已经发现的公开平台页面，用完整段落复核改写内容；它不会登录平台、处理验证码或绕过反爬。`SCAN_IMAGE_ENGINES` 默认同时使用 Google Lens 精确同图、Google Lens 视觉相似与 Bing 同图页面。
 
 图片检索不会直接把可能失效的小红书 CDN 地址交给 Google Lens。应用会生成一个 30 分钟有效、带 HMAC 签名的只读图片代理地址；代理仅允许小红书的 `xhscdn.com`、`xhscdn.net`、官网图片域名和固定 Picasso 素材桶，限定图片格式与 12MB 大小，并拒绝其他云存储桶或任意外部 URL，避免 SSRF。
 
@@ -65,11 +68,13 @@ npm run verify:deployment
 
 | 平台 | 域名 |
 | --- | --- |
-| 大众点评 | `dianping.com` |
+| 大众点评 | `dianping.com`, `dpurl.cn` |
 | 携程 | `ctrip.com`, `trip.com` |
 | 去哪儿 | `qunar.com` |
 | 飞猪 | `fliggy.com`, `alitrip.com`, `travel.taobao.com`, `trip.taobao.com` |
 | 高德地图 | `amap.com`, `gaode.com` |
 | 其他公开网页 | 除小红书和搜索引擎本身之外的公开域名 |
 
-文字检索从正文选取有区分度的关键句和短特征词组合，在查询预算内交叉执行带引号的精确原文搜索与不带引号的改写内容搜索，再用本地相似度过滤候选；即使搜索摘要没有展示命中的原句，也会以较低强度保留精确原文查询返回的可疑链接，避免漏报。图片检索最多处理原笔记前四张图片，并分别请求 Google Lens 精确同图、Google Lens 视觉相似和 Bing 同图页面。图片分数是根据精确匹配、视觉结果排序、搜索引擎交叉命中以及同一页面命中的原图数量形成的“线索强度”，不是侵权概率。重新扫描会先刷新小红书正文和可能已过期的原图地址。已经收集的链接不会因为后续搜索暂时未命中而被删除；系统保留首次发现、最近命中与本轮状态。单个查询失败不会丢弃其他已成功的结果，匹配结果按综合线索强度排序并可导出 CSV。
+文字检索会先删除话题标签、`@生活薯` 等账号召唤、平台助手名称、点赞收藏等公共操作文本，再从正文选取有区分度的地点、路线、出口、距离和关键句。查询预算按平台轮流分配给不同原句与特征组合；候选链接被发现后，系统会在不登录、不绕过验证码的前提下读取已知平台的公开页面，用“段落对段落”方式复核改写内容。图片检索从整篇笔记均匀选图，并分别请求 Google Lens 精确同图、Google Lens 视觉相似和 Bing 同图页面。普通视觉相似结果不再自动越过阈值；同一目标页面命中多张不同原图时才会明显升权，以兼顾裁切、调色、去水印和拼图复用。图片分数仍是“线索强度”，不是侵权概率。
+
+大众点评、携程、去哪儿、飞猪和高德的用户内容搜索并没有统一的匿名公开 API：例如高德公开接口主要返回 POI，大众点评公开搜索可能要求身份核实。项目不会调用未公开接口或绕过平台安全机制。若后续取得平台开放接口、合作权限或一个获授权的站内搜索服务，可在候选发现层接入；当前版本会优先用图片反查发现这些未被普通搜索引擎收录的公开页面，再直接读取页面进行图文复核。

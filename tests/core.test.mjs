@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { extractSourceNote } from "../lib/source-note.ts";
 import { createSessionToken, isSessionValid, sessionCookie, verifyPassword } from "../lib/auth.ts";
-import { extractSearchKeywords, extractSearchPhrases, textSimilarity } from "../lib/matching.ts";
+import { bestPassageSimilarity, cleanComparableText, extractSearchKeywords, extractSearchPhrases, textSimilarity } from "../lib/matching.ts";
 import { createSourceImageProxyUrl, isAllowedSourceImageUrl, normalizeSourceImageUrl, verifySourceImageProxyUrl } from "../lib/source-images.ts";
 import { GET as getSourceImage } from "../app/api/source-image/route.ts";
 import { scanPublicWeb } from "../lib/scanner.ts";
@@ -145,6 +145,30 @@ test("accepts the full Xiaohongshu mobile share text and extracts its trusted UR
   assert.equal(requestedUrl, "https://xhslink.com/example");
   assert.equal(note.title, "福州烟台山散步路线");
   assert.match(note.text, /江面日落/);
+});
+
+test("accepts current xhslink.cn short links", async () => {
+  const requestedUrls = [];
+  globalThis.fetch = async (value) => {
+    requestedUrls.push(String(value));
+    if (requestedUrls.length === 1) {
+      return new Response(null, {
+        status: 302,
+        headers: { location: "https://www.xiaohongshu.com/explore/abc123?xsec_source=app_share" },
+      });
+    }
+    return {
+      ok: true,
+      status: 200,
+      url: String(value),
+      headers: new Headers({ "content-length": "500" }),
+      text: async () => `<!doctype html><meta property="og:title" content="奥森北园花海路线"><meta property="og:description" content="从林萃桥地铁站步行前往北园花田野趣，沿途可以看到向日葵。">`,
+    };
+  };
+
+  const note = await extractSourceNote("http://xhslink.cn/o/example");
+  assert.equal(requestedUrls[0], "https://xhslink.cn/o/example");
+  assert.match(note.title, /奥森北园花海/);
 });
 
 test("upgrades a trusted Xiaohongshu HTTP redirect without fetching it over plaintext", async () => {
@@ -316,13 +340,14 @@ test("scores copied Chinese text above loosely related text", () => {
   assert.ok(textSimilarity(source, unrelated) < 0.3);
 });
 
-test("builds distinctive search phrases and removes hashtags", () => {
+test("builds distinctive search phrases and removes hashtags and public account mentions", () => {
   const phrases = extractSearchPhrases({
     title: "青岛海边散步路线",
-    text: "从小麦岛沿着海边木栈道一直走到日落。\n#青岛旅行 傍晚六点可以看到整片橘色晚霞。",
+    text: "从小麦岛沿着海边木栈道一直走到日落。\n@生活薯 @摄影薯 @小红书创作助手 #青岛旅行[话题]# 傍晚六点可以看到整片橘色晚霞。",
   });
   assert.ok(phrases.length >= 2);
   assert.ok(phrases.every((phrase) => !phrase.includes("#")));
+  assert.ok(phrases.every((phrase) => !phrase.includes("@") && !phrase.includes("生活薯") && !phrase.includes("小红书创作助手")));
   assert.ok(phrases.some((phrase) => phrase.includes("木栈道")));
 });
 
@@ -331,7 +356,7 @@ test("builds short rewrite-search features and keeps distinctive identifiers", (
     title: "厦门旧城慢走记录",
     text: "#厦门旅行 走到B17蓝色门牌后从榕树拐角转弯，最后会看见钟楼倒影和隐藏观景台。",
   });
-  assert.ok(keywords.length >= 3 && keywords.length <= 5);
+  assert.ok(keywords.length >= 3 && keywords.length <= 8);
   assert.ok(keywords.includes("B17"));
   assert.ok(keywords.every((keyword) => !keyword.includes("#")));
   assert.ok(keywords.some((keyword) => keyword.includes("榕树") || keyword.includes("钟楼")));
@@ -344,6 +369,16 @@ test("samples the middle and end of a long paragraph instead of searching only i
   });
   assert.ok(phrases.some((phrase) => phrase.includes("B17蓝色门牌")));
   assert.ok(phrases.some((phrase) => phrase.includes("隐藏观景台")));
+});
+
+test("compares rewritten route passages while ignoring platform boilerplate", () => {
+  const source = {
+    title: "7.5live｜奥森北园花海路线",
+    text: "从地铁八号线林萃桥C2口出，向北步行约十分钟到北区西门。进门右转沿步道走五百米到花田野趣。@生活薯 @摄影薯 #北京拍照[话题]#",
+  };
+  const rewritten = "公共交通优先选择地铁八号线，在林萃桥C2口出站。向北走十分钟抵达园区西门，入园向右沿步道前行五百米，就能到花田野趣。";
+  assert.doesNotMatch(cleanComparableText(source.text), /@|生活薯|摄影薯|北京拍照|话题/);
+  assert.ok(bestPassageSimilarity(source, rewritten) >= 0.65);
 });
 
 test("signs short-lived image proxy URLs and rejects tampering or SSRF targets", () => {
@@ -517,7 +552,9 @@ test("covers every named travel platform across Baidu and Google results", async
     }));
     const engines = new Set();
     globalThis.fetch = async (value) => {
-      const engine = new URL(String(value)).searchParams.get("engine");
+      const url = new URL(String(value));
+      const engine = url.searchParams.get("engine");
+      if (!engine) return new Response("<html><body>公开平台页面</body></html>", { headers: { "content-type": "text/html" } });
       engines.add(engine);
       assert.ok(engine === "baidu" || engine === "google");
       return Response.json({ organic_results: organicResults });
@@ -673,7 +710,7 @@ test("raises image lead strength when multiple original images point to the same
     assert.equal(imageSearches, 2);
     assert.equal(result.matches.length, 1);
     assert.equal(result.matches[0].matchType, "图片相似");
-    assert.equal(result.matches[0].imageScore, 0.91);
+    assert.equal(result.matches[0].imageScore, 0.82);
     assert.equal(result.matches[0].evidence.length, 2);
   } finally {
     if (previousPassword === undefined) delete process.env.APP_PASSWORD;
@@ -684,6 +721,112 @@ test("raises image lead strength when multiple original images point to the same
     else process.env.SERPAPI_API_KEY = previousSerpKey;
     if (previousImageEngines === undefined) delete process.env.SCAN_IMAGE_ENGINES;
     else process.env.SCAN_IMAGE_ENGINES = previousImageEngines;
+  }
+});
+
+test("samples images across the full note instead of checking only the opening gallery", async () => {
+  const previousPassword = process.env.APP_PASSWORD;
+  const previousSiteUrl = process.env.NEXT_PUBLIC_SITE_URL;
+  const previousSerpKey = process.env.SERPAPI_API_KEY;
+  const previousImageEngines = process.env.SCAN_IMAGE_ENGINES;
+  const previousImageLimit = process.env.SCAN_MAX_IMAGES;
+  const previousSearchLimit = process.env.SCAN_MAX_IMAGE_SEARCHES;
+  process.env.APP_PASSWORD = "a-strong-private-password";
+  process.env.NEXT_PUBLIC_SITE_URL = "https://radar.example";
+  process.env.SERPAPI_API_KEY = "test-serp-key";
+  process.env.SCAN_IMAGE_ENGINES = "google_lens";
+  process.env.SCAN_MAX_IMAGES = "8";
+  process.env.SCAN_MAX_IMAGE_SEARCHES = "8";
+  try {
+    const searchedImages = [];
+    globalThis.fetch = async (value) => {
+      const url = new URL(String(value));
+      assert.equal(url.searchParams.get("engine"), "google_lens");
+      assert.equal(url.searchParams.get("type"), "visual_matches");
+      const proxy = new URL(url.searchParams.get("url"));
+      searchedImages.push(proxy.searchParams.get("url"));
+      return Response.json({ visual_matches: [] });
+    };
+
+    const imageUrls = Array.from(
+      { length: 9 },
+      (_, index) => `https://sns-webpic-qc.xhscdn.com/notes/image-${index + 1}.webp`,
+    );
+    const result = await scanPublicWeb({
+      url: "https://www.xiaohongshu.com/explore/source-note",
+      title: "短标题",
+      text: "短正文",
+      imageUrls,
+      author: null,
+    }, ["web"], "https://radar.example");
+
+    assert.equal(result.partial, false);
+    assert.equal(searchedImages.length, 8);
+    assert.equal(searchedImages[0], imageUrls[0]);
+    assert.equal(searchedImages.at(-1), imageUrls.at(-1));
+    assert.ok(searchedImages.includes(imageUrls[5]));
+  } finally {
+    if (previousPassword === undefined) delete process.env.APP_PASSWORD;
+    else process.env.APP_PASSWORD = previousPassword;
+    if (previousSiteUrl === undefined) delete process.env.NEXT_PUBLIC_SITE_URL;
+    else process.env.NEXT_PUBLIC_SITE_URL = previousSiteUrl;
+    if (previousSerpKey === undefined) delete process.env.SERPAPI_API_KEY;
+    else process.env.SERPAPI_API_KEY = previousSerpKey;
+    if (previousImageEngines === undefined) delete process.env.SCAN_IMAGE_ENGINES;
+    else process.env.SCAN_IMAGE_ENGINES = previousImageEngines;
+    if (previousImageLimit === undefined) delete process.env.SCAN_MAX_IMAGES;
+    else process.env.SCAN_MAX_IMAGES = previousImageLimit;
+    if (previousSearchLimit === undefined) delete process.env.SCAN_MAX_IMAGE_SEARCHES;
+    else process.env.SCAN_MAX_IMAGE_SEARCHES = previousSearchLimit;
+  }
+});
+
+test("rechecks a discovered platform page with full rewritten paragraphs", async () => {
+  const previousSerpKey = process.env.SERPAPI_API_KEY;
+  const previousLimit = process.env.SCAN_MAX_TEXT_SEARCHES;
+  const previousPageLimit = process.env.SCAN_MAX_PLATFORM_PAGE_FETCHES;
+  process.env.SERPAPI_API_KEY = "test-serp-key";
+  process.env.SCAN_MAX_TEXT_SEARCHES = "4";
+  process.env.SCAN_MAX_PLATFORM_PAGE_FETCHES = "4";
+  try {
+    globalThis.fetch = async (value) => {
+      const url = new URL(String(value));
+      if (url.hostname === "serpapi.com") {
+        if (/".+"/.test(url.searchParams.get("q") || "")) return Response.json({ organic_results: [] });
+        return Response.json({
+          organic_results: [{
+            position: 5,
+            title: "北园花海游玩记录",
+            link: "https://m.dianping.com/feeddetail/499647240",
+            snippet: "夏日公园赏花。",
+          }],
+        });
+      }
+      assert.equal(url.hostname, "m.dianping.com");
+      return new Response(`<!doctype html><html><body>
+        <article>公共交通优先选择地铁八号线，在林萃桥C2口出站。向北走十分钟抵达园区西门，
+        入园向右沿步道前行五百米，就能到花田野趣。</article>
+      </body></html>`, { headers: { "content-type": "text/html; charset=utf-8" } });
+    };
+
+    const result = await scanPublicWeb({
+      url: "https://www.xiaohongshu.com/explore/source-note",
+      title: "奥森北园花海路线",
+      text: "从地铁八号线林萃桥C2口出，向北步行约十分钟到北区西门。进门右转沿步道走五百米到花田野趣。",
+      imageUrls: [],
+      author: "原创作者",
+    }, ["dianping"]);
+
+    assert.equal(result.matches.length, 1);
+    assert.ok(result.matches[0].textScore >= 0.65);
+    assert.ok(result.matches[0].evidence.some((item) => item.includes("目标平台公开页面正文比对")));
+  } finally {
+    if (previousSerpKey === undefined) delete process.env.SERPAPI_API_KEY;
+    else process.env.SERPAPI_API_KEY = previousSerpKey;
+    if (previousLimit === undefined) delete process.env.SCAN_MAX_TEXT_SEARCHES;
+    else process.env.SCAN_MAX_TEXT_SEARCHES = previousLimit;
+    if (previousPageLimit === undefined) delete process.env.SCAN_MAX_PLATFORM_PAGE_FETCHES;
+    else process.env.SCAN_MAX_PLATFORM_PAGE_FETCHES = previousPageLimit;
   }
 });
 

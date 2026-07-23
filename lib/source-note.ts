@@ -1,7 +1,7 @@
 import type { SourceNote } from "./types";
 import { normalizeSourceImageUrl } from "./source-images.ts";
 
-const sourceHosts = ["xiaohongshu.com", "xhslink.com", "xhs.cn", "rednote.com"];
+const sourceHosts = ["xiaohongshu.com", "xhslink.com", "xhslink.cn", "xhs.cn", "rednote.com"];
 
 function allowedSourceHost(hostname: string) {
   const host = hostname.toLowerCase();

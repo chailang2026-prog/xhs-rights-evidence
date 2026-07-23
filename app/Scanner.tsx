@@ -300,7 +300,7 @@ export default function Scanner() {
               <div>{targetPlatforms.map((platform) => <button key={platform.id} type="button" aria-pressed={selectedPlatforms.includes(platform.id)} className={selectedPlatforms.includes(platform.id) ? "selected" : ""} onClick={() => togglePlatform(platform.id)}>{platform.name}<i /></button>)}</div>
             </fieldset>
             <button className="scan-button" type="submit" disabled={scanning}>{scanning ? <><span className="button-spinner" />{scanSteps[scanStep]}</> : <>开始全网匹配 <span>→</span></>}</button>
-            <p className="scan-caption">每次会用 Google Lens 精确同图、视觉相似与 Bing 比对最多 4 张原图，并通过百度与 Google 检索精确原句和改写特征词。</p>
+            <p className="scan-caption">自动剔除公共话题与 @账号召唤，均匀比对最多 8 张原图；已发现的平台页面会再做公开正文段落复核。</p>
           </form>
         </section>
 
@@ -348,7 +348,7 @@ export default function Scanner() {
           </div>
         </section>
       </main>
-      <footer><span>原创雷达</span><p>只检索公开可访问且已被搜索引擎收录的网页，不绕过平台登录或反爬机制。</p></footer>
+      <footer><span>原创雷达</span><p>只处理公开可访问内容，不绕过平台登录、验证码或反爬机制；未开放站内检索接口的平台主要依靠图片反查发现候选。</p></footer>
       {message && <div className="toast" role="status">{message}</div>}
     </div>
   );
